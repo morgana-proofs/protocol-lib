@@ -1,0 +1,29 @@
+[package]
+name = "protocol-lib"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+ark-ec = { version = "^0.5.0", features = ["parallel"]}
+ark-ff = { version = "^0.5.0", features = ["parallel", "asm"] }
+ark-std = { version = "^0.5.0", features = ["parallel"] }
+ark-serialize = { version = "^0.5.0", default-features = false, features = ["derive"] }
+ark-bn254 = { version = "^0.5.0", default-features = false, features = ["curve"] }
+
+rand = {version = "^ 0.9.0"}
+
+rayon = {version = "^1.10.0"}
+itertools = {version = "^0.14.0"}
+merlin = {version = "3.0.0"}
+num-traits = {version = "0.2.19"}
+zeroize = "1.8.1"
+
+[profile.rel-with-debinfo]
+inherits = "release"
+debug = true
+
+[features]
+parallel = []
+default = [
+#    "parallel"
+]
