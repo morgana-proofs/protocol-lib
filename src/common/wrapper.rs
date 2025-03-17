@@ -1,6 +1,7 @@
 use std::ops::{Add, Mul, Neg, Sub};
 
 use ark_ff::{One, PrimeField, Zero};
+use ark_serialize::{CanonicalDeserialize, CanonicalSerialize};
 use itertools::Itertools;
 
 // #[derive(Clone, PartialEq, Eq)]
@@ -26,29 +27,31 @@ pub trait PolyOps:
     + for<'a> Sub<&'a Self, Output = Self>
     + for<'a> Sub<&'a mut Self, Output = Self>
     + Neg<Output = Self>
+    + Invert<Output = Self>
     + PartialEq
     + Eq
     + PolyOpUtil {
 }
 
-    impl<T: Clone
-        + Add<Self, Output = Self>
-        + for<'a> Add<&'a Self, Output = Self>
-        + for<'a> Add<&'a mut Self, Output = Self>
-        + Mul<Self, Output = Self>
-        + for<'a> Mul<&'a Self, Output = Self>
-        + for<'a> Mul<&'a mut Self, Output = Self>
-        + Sub<Self, Output = Self>
-        + for<'a> Sub<&'a Self, Output = Self>
-        + for<'a> Sub<&'a mut Self, Output = Self>
-        + Neg<Output = Self>
-        + PartialEq
-        + Eq
-        + PolyOpUtil
-    > PolyOps for T {}
+impl<T: Clone
+    + Add<Self, Output = Self>
+    + for<'a> Add<&'a Self, Output = Self>
+    + for<'a> Add<&'a mut Self, Output = Self>
+    + Mul<Self, Output = Self>
+    + for<'a> Mul<&'a Self, Output = Self>
+    + for<'a> Mul<&'a mut Self, Output = Self>
+    + Sub<Self, Output = Self>
+    + for<'a> Sub<&'a Self, Output = Self>
+    + for<'a> Sub<&'a mut Self, Output = Self>
+    + Neg<Output = Self>
+    + Invert<Output = Self>
+    + PartialEq
+    + Eq
+    + PolyOpUtil
+> PolyOps for T {}
 
-pub trait TPrimeField : PolyOps + Copy + Zero + One + From<u64> + Invert<Output = Self> {}
-impl<T: PolyOps + Copy + Zero + One + From<u64> + Invert<Output = Self>> TPrimeField for T {}
+pub trait TPrimeField : PolyOps + Copy + Zero + One + From<u64> + 'static + CanonicalSerialize + CanonicalDeserialize {}
+impl<T: PolyOps + Copy + Zero + One + From<u64> + 'static + CanonicalSerialize + CanonicalDeserialize> TPrimeField for T {}
 
 pub trait Invert {
     type Output;
