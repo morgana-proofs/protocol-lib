@@ -1,6 +1,6 @@
 // Board to allocate signals in and traits related to encoding of operations.
 
-use std::{any::TypeId, cell::{RefCell, RefMut}, collections::HashMap, fmt::Debug, io::{Read, Write}, marker::PhantomData, rc::Rc, sync::atomic::{AtomicU64, Ordering}};
+use std::{any::TypeId, cell::{RefCell, RefMut}, collections::HashMap, fmt::Debug, io::Read, marker::PhantomData, rc::Rc, sync::atomic::{AtomicU64, Ordering}};
 
 use ark_serialize::{CanonicalDeserialize, CanonicalSerialize};
 use itertools::Itertools;
@@ -48,6 +48,12 @@ impl<T: 'static, Dialect: 'static> Debug for Sig<T, Dialect>{
     }
 }
 
+impl<T: 'static, Dialect: 'static> PartialEq for Sig<T, Dialect> {
+    fn eq(&self, other: &Self) -> bool {
+        self.addr == other.addr && self.board_id() == other.board_id()
+    }
+}
+impl<T: 'static, Dialect: 'static> Eq for Sig<T, Dialect> {}
 
 /// Encoding of a type, operated by dialect. From the perspective of the board, it is enforced by HashMap preamble.
 #[derive(Clone, Copy, PartialEq, Eq, Debug, CanonicalSerialize, CanonicalDeserialize)]

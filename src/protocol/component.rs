@@ -1,25 +1,16 @@
-use crate::dialects::dialect::TDialectInterface;
+pub trait TProtocol<Dialect> {
+    type ClaimsBefore;
+    type ClaimsAfter;
 
-pub trait TSupportsVDialect<D: TDialectInterface> : ProtocolComponent {
-    fn _verify(&self, transcript: &mut D, claims: Self::ClaimsBefore<D>) -> Self::ClaimsAfter<D>;
+    fn verify(&self, ctx: &mut Dialect, claims: Self::ClaimsBefore) -> Self::ClaimsAfter;
+    fn prove<Prover>(&self, ctx: &mut Dialect, claims: Self::ClaimsBefore, advice: Prover::ProverInput) -> (Self::ClaimsAfter, Prover::ProverOutput) where Prover: TProverImpl<Dialect, Verifier = Self> {
+        Prover::_prove(&self, ctx, claims, advice)
+    }
 }
 
-pub trait TSupportsPDialect<D: TDialectInterface> : ProtocolComponent {
-    fn _prove(&self, transcript: &mut D, claims: Self::ClaimsBefore<D>, input: Self::ProverInput<D>) -> (Self::ClaimsAfter<D>, Self::ProverOutput<D>);
-}
-
-pub trait ProtocolComponent {
-    type ClaimsBefore<Dialect>;
-    type ClaimsAfter<Dialect>;
-    type ProverInput<Dialect>;
-    type ProverOutput<Dialect>;
-
-    fn verify<D>(&self, transcript: &mut D, claims: Self::ClaimsBefore<D>) -> Self::ClaimsAfter<D> where D: TDialectInterface, Self: TSupportsVDialect<D> {
-        self._verify(transcript, claims)
-    }
-
-    fn prove<D>(&self, transcript: &mut D, claims: Self::ClaimsBefore<D>, input: Self::ProverInput<D>) -> (Self::ClaimsAfter<D>, Self::ProverOutput<D>)
-        where D: TDialectInterface, Self: TSupportsPDialect<D>{
-        self._prove(transcript, claims, input)
-    }
+pub trait TProverImpl<Dialect> {
+    type Verifier : TProtocol<Dialect>;
+    type ProverInput;
+    type ProverOutput;
+    fn _prove(protocol: &Self::Verifier, ctx: &mut Dialect, claims: <Self::Verifier as TProtocol<Dialect>>::ClaimsBefore, advice: Self::ProverInput) -> (<Self::Verifier as TProtocol<Dialect>>::ClaimsAfter, Self::ProverOutput);
 }

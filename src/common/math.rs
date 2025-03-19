@@ -7,6 +7,18 @@ pub fn from_evals<F: TPrimeField>(evals: &[F]) -> Vec<F> {
     vandermonde_interpolation(evals)
 }
 
+
+pub fn evaluate_univar<F: PolyOps>(poly: &[F], x: &F) -> F {
+    let l = poly.len();
+    assert!(l > 0);
+    let mut run = poly[l - 1].clone();
+    for i in 0 .. l - 1 {
+        run = run.clone() * x;
+        run = run.clone() + &poly[l - i - 2];
+    }
+    run
+}
+
 /// Returns p(0) + p(1) and all coefficients but the 1st one.
 /// Only uses PolyOps
 pub fn compress<F: PolyOps>(coeffs: &[F]) -> (F, Vec<F>) {
@@ -32,15 +44,15 @@ pub fn vandermonde_interpolation<F: TPrimeField>(evals: &[F]) -> Vec<F> {
 
     let mut vandermonde: Vec<Vec<F>> = Vec::with_capacity(n);
     for i in 0..n {
-      let mut row = Vec::with_capacity(n);
-      let x = xs[i];
-      row.push(F::one());
-      row.push(x);
-      for j in 2..n {
+        let mut row = Vec::with_capacity(n);
+        let x = xs[i];
+        row.push(F::one());
+        row.push(x);
+        for j in 2..n {
         row.push(row[j - 1] * x);
-      }
-      row.push(evals[i]);
-      vandermonde.push(row);
+        }
+        row.push(evals[i]);
+        vandermonde.push(row);
     }
 
     gaussian_elimination(&mut vandermonde)
@@ -81,11 +93,11 @@ fn echelon<F: TPrimeField>(matrix: &mut [Vec<F>], i: usize, j: usize) {
     let size = matrix.len();
     if matrix[i][i] == F::zero() {
     } else {
-      let factor = matrix[j + 1][i] * matrix[i][i].invert().unwrap();
-      (i..size + 1).for_each(|k| {
-        let tmp = matrix[i][k];
-        matrix[j + 1][k] = matrix[j + 1][k] - factor * tmp;
-      });
+        let factor = matrix[j + 1][i] * matrix[i][i].invert().unwrap();
+        (i..size + 1).for_each(|k| {
+            let tmp = matrix[i][k];
+            matrix[j + 1][k] = matrix[j + 1][k] - factor * tmp;
+        });
     }
   }
   
@@ -93,12 +105,12 @@ fn eliminate<F: TPrimeField>(matrix: &mut [Vec<F>], i: usize) {
     let size = matrix.len();
     if matrix[i][i] == F::zero() {
     } else {
-      for j in (1..i + 1).rev() {
+        for j in (1..i + 1).rev() {
         let factor = matrix[j - 1][i] * matrix[i][i].invert().unwrap();
         for k in (0..size + 1).rev() {
-          let tmp = matrix[i][k];
-          matrix[j - 1][k] = matrix[j - 1][k] - factor * tmp;
+            let tmp = matrix[i][k];
+            matrix[j - 1][k] = matrix[j - 1][k] - factor * tmp;
         }
-      }
+        }
     }
 }

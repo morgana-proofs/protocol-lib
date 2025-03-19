@@ -1,5 +1,3 @@
-use std::{cell::{RefCell, RefMut}, marker::PhantomData, rc::Rc, sync::atomic::AtomicU64};
-
 use crate::common::wrapper::{PolyOps, TPrimeField};
 
 use super::board::{Sig, TSupportsFormalArithOps, TSupportsFormalType, TSupportsFormalVTranscript};
@@ -52,10 +50,9 @@ pub trait TTranscriptSupports<T> {
     fn _unconstrained_write(&mut self, value: &T); 
 }
 
-
 /// A verifier that is capable of field element manipulation
-pub trait TArithmeticDialect<F: TPrimeField>: TDialectInterface + TSupportsFormalType<F> + TSupportsFormalArithOps<F> + TSupportsFormalVTranscript<F> + TTranscriptSupports<Sig<F, Self>>{}
+pub trait TFormalArithmeticDialect<F: TPrimeField>: TDialectInterface + TSupportsFormalType<F> + TSupportsFormalArithOps<F> + TSupportsFormalVTranscript<F> + TTranscriptSupports<Sig<F, Self>>{}
 
-// pub trait TEllipticDialect: TArithmeticDialect + TSupportsGroup<Self::ESig> {
-//     type ESig: GroupOps<Scalar = Self::Sig>;
-// }
+pub trait TArithmeticDialect<F: PolyOps> : TDialectInterface + TTranscriptSupports<F> {}
+
+impl<F: TPrimeField, Dialect: TFormalArithmeticDialect<F>> TArithmeticDialect<Sig<F, Dialect>> for Dialect {}

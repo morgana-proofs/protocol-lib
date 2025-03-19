@@ -1,10 +1,10 @@
-use std::{any::TypeId, cell::{RefCell, RefMut}, collections::HashMap, fmt::Debug, io::Read, marker::PhantomData, ops::{Add, Mul, Neg, Sub}, rc::Rc, sync::atomic::Ordering};
+use std::{any::TypeId, cell::RefCell, collections::HashMap, fmt::Debug, io::Read, marker::PhantomData, ops::{Add, Mul, Neg, Sub}, rc::Rc};
 
 use ark_serialize::CanonicalDeserialize;
 
 use crate::common::wrapper::{Invert, PolyOpUtil, TPrimeField};
 
-use super::{board::{Board, FormalArithOps, FormalVTranscriptOps, OpEnc, Sig, TSupportsFormalArithOps, TSupportsFormalType, TSupportsFormalVTranscript, TypeEnc}, dialect::{TArithmeticDialect, TDialectInterface, TTranscriptSupports}};
+use super::{board::{Board, FormalArithOps, FormalVTranscriptOps, OpEnc, Sig, TSupportsFormalArithOps, TSupportsFormalType, TSupportsFormalVTranscript, TypeEnc}, dialect::{TFormalArithmeticDialect, TDialectInterface, TTranscriptSupports}};
 
 // ------------- ENCODING --------------
 
@@ -13,34 +13,6 @@ pub enum IRArithVerifierEncoding<F> {
     Transcript(FormalVTranscriptOps),
     Arith(FormalArithOps<F>),
 }
-
-// -------------- Board ----------------
-// pub struct IRArithVerifierBoard<F: TPrimeField> {
-//     pub n_wtns: usize,
-//     pub ops: Vec<IRArithVerifierEncoding<F>>,
-//     pub uid: u64,
-// }
-
-// impl<F: TPrimeField> IRArithVerifierBoard<F> {
-//     pub fn new() -> Self {
-//         Self { n_wtns: 0, ops: vec![], uid: UID.fetch_add(1, Ordering::Relaxed) }
-//     }
-// }
-
-// ---------- Board Operator & Sig ------------
-
-// #[derive(Clone)]
-// pub struct Sig<F: TPrimeField> {
-//     pub addr: usize,
-//     pub board: Rc<RefCell<IRArithVerifierBoard<F>>>,
-// }
-
-// impl<F: TPrimeField> PartialEq for Sig<F> {
-//     fn eq(&self, other: &Self) -> bool {
-//         self.addr == other.addr && self.board_id() == other.board_id()
-//     }
-// }
-// impl<F: TPrimeField> Eq for Sig<F> {}
 
 pub struct IRArithVerifier<F: TPrimeField> {
     board: Rc<RefCell<Board>>,
@@ -59,28 +31,12 @@ impl<F: TPrimeField> IRArithVerifier<F> {
             let typeid = TypeEnc::deserialize_compressed(&mut reader).unwrap();
             assert!(typeid.0 == 0, "We only have a single type.");
             if let Some(x) = Self::decode_vtranscript_op_args(op, &mut reader) {ret.push(IRArithVerifierEncoding::Transcript(x))}
-            else if let Some(x) = Self::decode_arith_op_args(op, &mut reader) {ret.push(IRArithVerifierEncoding::Arith((x)))}
+            else if let Some(x) = Self::decode_arith_op_args(op, &mut reader) {ret.push(IRArithVerifierEncoding::Arith(x))}
             else {panic!()}
         };
         ret
     }
 }
-
-// impl<F: TPrimeField> Sig<F> {
-//     fn board_mut(&self) -> RefMut<IRArithVerifierBoard<F>> {
-//         (*self.board).borrow_mut()
-//     }
-
-//     fn board_id(&self) -> u64 {
-//         (*self.board).borrow().uid
-//     }
-// }
-
-// impl<F: TPrimeField> Debug for Sig<F>{
-//     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-//         f.debug_struct("Sig").field("addr", &self.addr).finish()
-//     }
-// }
 
 // ------------ Trait implementations -----------------
 
@@ -242,10 +198,8 @@ impl<F: TPrimeField> TTranscriptSupports<Sig<F, IRArithVerifier<F>>> for IRArith
 
 }
 
-
 impl<F: TPrimeField> TDialectInterface for IRArithVerifier<F> {}
-impl<F: TPrimeField> TArithmeticDialect<F> for IRArithVerifier<F> {}
-
+impl<F: TPrimeField> TFormalArithmeticDialect<F> for IRArithVerifier<F> {}
 
 #[cfg(test)]
 mod tests {
