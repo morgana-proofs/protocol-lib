@@ -12,3 +12,8 @@ pub trait Sumcheckable<F: TPrimeField> {
     fn challenges(&self) -> &[F];
 }
 
+pub trait FoldToSumcheckable<F: TPrimeField> {
+    type Target : Sumcheckable<F>;
+
+    fn rlc(self, gamma: F) -> Self::Target;
+}

@@ -9,6 +9,7 @@ ark-ff = { version = "^0.5.0", features = ["parallel", "asm"] }
 ark-std = { version = "^0.5.0", features = ["parallel"] }
 ark-serialize = { version = "^0.5.0", default-features = false, features = ["derive"] }
 ark-bn254 = { version = "^0.5.0", default-features = false, features = ["curve"] }
+anyhow = "1.0.97"
 
 rand = {version = "^ 0.9.0"}
 

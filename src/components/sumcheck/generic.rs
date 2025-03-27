@@ -2,6 +2,7 @@ use std::marker::PhantomData;
 use itertools::Itertools;
 
 use crate::{common::{algfn::AlgFnSO, math::{compress, decompress, evaluate_univar}, wrapper::{PolyOps, TPrimeField}}, dialects::dialect::TArithmeticDialect, protocol::component::{TProtocol, TProverImpl}};
+pub(crate) use crate::common::claims::{EvalClaim, SumClaim};
 use super::sumcheckable::Sumcheckable;
 
 
@@ -19,12 +20,6 @@ impl<F: PolyOps, Fun: AlgFnSO<F>> SumcheckProtocol<F, Fun> {
     }
 }
 
-
-pub struct SumClaim<F>(pub F);
-pub struct EvalClaim<F> {
-    pub ev: F,
-    pub point: Vec<F>,
-}
 
 impl<F: PolyOps, Fun: AlgFnSO<F>, Dialect: TArithmeticDialect<F>> TProtocol<Dialect> for SumcheckProtocol<F, Fun> {
     type ClaimsBefore = SumClaim<F>;

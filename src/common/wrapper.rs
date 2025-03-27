@@ -1,3 +1,4 @@
+use std::fmt::Debug;
 use std::ops::{Add, Mul, Neg, Sub};
 
 use ark_ff::{One, PrimeField, Zero};
@@ -30,8 +31,8 @@ pub trait PolyOps:
     + Invert<Output = Self>
     + PartialEq
     + Eq
-    + PolyOpUtil {
-}
+    + PolyOpUtil
+    {}
 
 impl<T: Clone
     + Add<Self, Output = Self>
@@ -50,8 +51,12 @@ impl<T: Clone
     + PolyOpUtil
 > PolyOps for T {}
 
-pub trait TPrimeField : PolyOps + Copy + Zero + One + From<u64> + 'static + CanonicalSerialize + CanonicalDeserialize {}
-impl<T: PolyOps + Copy + Zero + One + From<u64> + 'static + CanonicalSerialize + CanonicalDeserialize> TPrimeField for T {}
+pub trait Double {
+    fn double(&self) -> Self;
+}
+
+pub trait TPrimeField : PolyOps + Copy + Zero + One + From<u64> + 'static + CanonicalSerialize + CanonicalDeserialize + Debug + Double {}
+impl<T: PolyOps + Copy + Zero + One + From<u64> + 'static + CanonicalSerialize + CanonicalDeserialize + Debug + Double> TPrimeField for T {}
 
 pub trait Invert {
     type Output;
@@ -64,6 +69,12 @@ impl<U: PrimeField> Invert for U {
 
     fn invert(self) -> Option<U> {
         self.inverse()
+    }
+}
+
+impl<U: PrimeField> Double for U {
+    fn double(&self) -> Self {
+        self.double()
     }
 }
 
