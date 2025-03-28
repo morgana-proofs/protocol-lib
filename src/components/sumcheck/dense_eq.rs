@@ -8,8 +8,9 @@ use rayon::current_num_threads;
 use rayon::prelude::IntoParallelIterator;
 use crate::common::algfn::{AlgFn, AlgFnSO};
 use crate::common::claims::{EvalClaim, SinglePointClaims, SumClaim};
-use crate::common::math::{bind_dense_poly, eq_poly_sequence_last, evaluate_univar};
+use crate::common::math::{bind_dense_poly, eq_poly_sequence_last, evaluate_univar, from_evals};
 use crate::common::wrapper::{PolyOps, TPrimeField};
+use crate::components::lookups::logup::logup::LogupMainphase;
 use crate::components::sumcheck::algfn_wrappers::{EqWrapper, GammaWrapper};
 use crate::components::sumcheck::generic::{SumcheckGenericProverImpl, SumcheckProtocol};
 use crate::components::sumcheck::sumcheckable::{FoldToSumcheckable, Sumcheckable};
@@ -19,7 +20,7 @@ use crate::protocol::component::{TProtocol, TProverImpl};
 
 
 #[derive(Clone, Debug)]
-pub struct DenseSumcheckObjectSO<F: TPrimeField, Fun: AlgFnSO<F>> {
+pub struct DenseSumcheckableSO<F: TPrimeField, Fun: AlgFnSO<F>> {
     pub polys: Vec<Vec<F>>,
     challenges: Vec<F>,
     f: Fun,
@@ -30,7 +31,7 @@ pub struct DenseSumcheckObjectSO<F: TPrimeField, Fun: AlgFnSO<F>> {
     pub claim: F,
 }
 
-impl<F: TPrimeField, Fun: AlgFnSO<F>> DenseSumcheckObjectSO<F, Fun> {
+impl<F: TPrimeField, Fun: AlgFnSO<F>> DenseSumcheckableSO<F, Fun> {
     pub fn new(polys: Vec<Vec<F>>, f: Fun, num_vars: usize, claim_hint: F) -> Self {
         let l = polys.len();
         assert_eq!(l, f.n_ins());
@@ -41,7 +42,7 @@ impl<F: TPrimeField, Fun: AlgFnSO<F>> DenseSumcheckObjectSO<F, Fun> {
     }
 }
 
-impl<F: TPrimeField, Fun: AlgFnSO<F>> Sumcheckable<F> for DenseSumcheckObjectSO<F, Fun> {
+impl<F: TPrimeField, Fun: AlgFnSO<F>> Sumcheckable<F> for DenseSumcheckableSO<F, Fun> {
     fn bind(&mut self, t: F) {
         assert!(self.round_idx < self.num_vars, "the protocol has already ended");
         self.challenges.push(t);
@@ -67,7 +68,7 @@ impl<F: TPrimeField, Fun: AlgFnSO<F>> Sumcheckable<F> for DenseSumcheckObjectSO<
                 let num_tasks = 8 * current_num_threads();
 
                 let task_size = (half + num_tasks - 1) / num_tasks;
-                // todo (rebenkoy): par
+
                 let acc: Vec<Vec<F>> = (0..num_tasks).into_iter().map(|task_idx| {
                     let mut difs = vec![F::zero(); n_polys];
                     let mut args = vec![F::zero(); n_polys];
@@ -105,7 +106,7 @@ impl<F: TPrimeField, Fun: AlgFnSO<F>> Sumcheckable<F> for DenseSumcheckObjectSO<
                 }
                 total_acc[0] = self.claim - total_acc[1];
 
-                self.cached_unipoly = Some(total_acc);
+                self.cached_unipoly = Some(from_evals(&total_acc));
             }
         }
         self.cached_unipoly.as_ref().unwrap().clone()
@@ -125,22 +126,22 @@ impl<F: TPrimeField, Fun: AlgFnSO<F>> Sumcheckable<F> for DenseSumcheckObjectSO<
 
 
 // Naive impl without Gruen's trick. Will be added later.
-pub struct DenseEqSumcheckObject<F: TPrimeField, Fun: AlgFn<F>> {
+pub struct DenseEqSumcheckable<F: TPrimeField, Fun: AlgFn<F>> {
     polys: Vec<Vec<F>>,
     point: Vec<F>,
     f: Fun,
     claim_hint: Vec<F>,
 }
 
-impl<F: TPrimeField, Fun: AlgFn<F>> DenseEqSumcheckObject<F, Fun> {
+impl<F: TPrimeField, Fun: AlgFn<F>> DenseEqSumcheckable<F, Fun> {
     pub fn new(polys: Vec<Vec<F>>, f: Fun, point: Vec<F>, claim_hint: Vec<F>) -> Self {
         assert!(claim_hint.len() == f.n_outs());
         Self { polys, f, point, claim_hint }
     }
 }
 
-impl<F: TPrimeField, Fun: AlgFn<F>> FoldToSumcheckable<F> for DenseEqSumcheckObject<F, Fun> {
-    type Target = DenseSumcheckObjectSO<F, EqWrapper<F, GammaWrapper<F, Fun>>>; // to be replaced
+impl<F: TPrimeField, Fun: AlgFn<F>> FoldToSumcheckable<F> for DenseEqSumcheckable<F, Fun> {
+    type Target = DenseSumcheckableSO<F, EqWrapper<F, GammaWrapper<F, Fun>>>; // to be replaced
 
     fn rlc(self, gamma: F) -> Self::Target {
         let gamma_wrapper = GammaWrapper::new(self.f, gamma);
@@ -200,11 +201,10 @@ impl <F: TPrimeField, Fun: AlgFn<F>, Dialect: TArithmeticDialect<F>> TProtocol<D
 
 
     fn verify(&self, ctx: &mut Dialect, claims: Self::ClaimsBefore) -> Self::ClaimsAfter {
-        let degrees = repeat_n(self.f.deg() + 1, self.num_vars);
         let gamma = ctx.challenge();
         let SinglePointClaims { point: input_point, evs } = claims;
         let folded_claim = gamma_rlc(gamma.clone(), &evs);
-        let generic_protocol_config = SumcheckProtocol::new(EqWrapper::new(GammaWrapper::new(self.f.clone(), gamma.clone())), self.f.deg());
+        let generic_protocol_config = SumcheckProtocol::new(EqWrapper::new(GammaWrapper::new(self.f.clone(), gamma.clone())), self.num_vars);
 
         let EvalClaim{ ev, point: output_point } = generic_protocol_config.verify(ctx, SumClaim(folded_claim));
 
@@ -224,7 +224,7 @@ impl<F: TPrimeField, Fun: AlgFn<F>, Dialect: TArithmeticDialect<F>> TProverImpl<
     fn _prove(protocol: &Self::Verifier, ctx: &mut Dialect, claims: <Self as TProtocol<Dialect>>::ClaimsBefore, advice: Self::ProverInput) -> (<Self as TProtocol<Dialect>>::ClaimsAfter, Self::ProverOutput) {
         let gamma = ctx.challenge();
         let SinglePointClaims { point: input_point, evs } = claims;
-        let so = DenseEqSumcheckObject::new(
+        let so = DenseEqSumcheckable::new(
             advice,
             protocol.f.clone(),
             input_point,
@@ -233,9 +233,19 @@ impl<F: TPrimeField, Fun: AlgFn<F>, Dialect: TArithmeticDialect<F>> TProverImpl<
 
         let so = so.rlc(gamma);
 
-        let generic_protocol_config = SumcheckProtocol::new(EqWrapper::new(GammaWrapper::new(protocol.f.clone(), gamma.clone())), protocol.f.deg());
+        let generic_protocol_config = SumcheckProtocol::new(
+            EqWrapper::new(GammaWrapper::new(protocol.f.clone(), gamma.clone())),
+            protocol.num_vars,
+        );
 
-        let (EvalClaim{point: output_point, ..}, mut poly_evs) = generic_protocol_config.prove::<SumcheckGenericProverImpl<_, _, _>>(ctx, SumClaim(so.claim), so);
+        let (
+            EvalClaim{point: output_point, ..},
+            mut poly_evs,
+        ) = generic_protocol_config.prove::<SumcheckGenericProverImpl<_, _, _>>(
+            ctx,
+            SumClaim(so.claim),
+            so,
+        );
 
         poly_evs.pop();
 
@@ -245,4 +255,72 @@ impl<F: TPrimeField, Fun: AlgFn<F>, Dialect: TArithmeticDialect<F>> TProverImpl<
 }
 
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::dialects::dialect::tests::ManualTestDialect;
+    use ark_bn254::Fq as F;
+    use ark_ff::Field;
+    use ark_std::{test_rng, UniformRand};
+    use num_traits::{One, Zero};
+    use crate::common::math::evaluate_multivar;
 
+    #[derive(Clone, Copy)]
+    pub struct TestFunction {}
+
+    impl AlgFn<F> for TestFunction {
+        fn exec(&self, args: &impl Index<usize, Output = F>) -> impl Iterator<Item = F> {
+            [args[0] * args[1] - F::one(), args[0]*args[2], (args[0] + args[2]).pow([4]), (args[1] - F::one()).pow([3])].into_iter()
+        }
+
+        fn deg(&self) -> usize {
+            4
+        }
+
+        fn n_ins(&self) -> usize {
+            3
+        }
+
+        fn n_outs(&self) -> usize {
+            4
+        }
+    }
+
+    #[test]
+    fn dense_sumcheck_with_eq_verifier_accepts_prover() {
+        let rng = &mut test_rng();
+        let logsize = 6;
+        let polys : Vec<Vec<F>> = (0..3).map(|_| (0 .. 1 << logsize).map(|_|F::rand(rng)).collect()).collect();
+        let point : Vec<F> = (0..logsize).map(|_| F::rand(rng)).collect();
+
+        let f = TestFunction{};
+
+        let mut output = vec![vec![]; f.n_outs()];
+
+        for i in 0 .. 1 << logsize {
+            let args : Vec<F> = polys.iter().map(|poly| poly[i]).collect();
+            f.exec(&args).zip(output.iter_mut()).map(|(ret, output)| output.push(ret)).count();
+        }
+
+        let mut transcript_p = ManualTestDialect::new((0..1000).map(|_| F::rand(rng)).collect_vec());
+
+        let ev_claims : Vec<F> = output.iter().map(|output| evaluate_multivar(output, &point)).collect();
+
+        let ev_claims = SinglePointClaims { point, evs: ev_claims };
+
+        let sumcheck = DenseEqSumcheck::new(f, logsize);
+
+        let (output_claims, _) = sumcheck.prove::<DenseEqSumcheck<_,_,>>(&mut transcript_p, ev_claims.clone(), polys.clone());
+
+        let proof = transcript_p.end();
+
+        let mut transcript_v = transcript_p;
+
+        let expected_output_claims = sumcheck.verify(&mut transcript_v, ev_claims);
+
+        assert_eq!(output_claims, expected_output_claims);
+
+        let SinglePointClaims { point : new_point, evs } = output_claims;
+        assert_eq!(polys.iter().map(|poly| evaluate_multivar(poly, &new_point)).collect_vec(), evs);
+    }
+}

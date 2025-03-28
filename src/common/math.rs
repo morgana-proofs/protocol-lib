@@ -1,4 +1,5 @@
 use std::iter::{once, repeat};
+use itertools::Itertools;
 use super::wrapper::{PolyOps, TPrimeField};
 
 /// Computes polynomial coefficients from values in points 0, 1, 2, ..., n
@@ -217,4 +218,26 @@ pub fn eq_poly_sequence_last<F: TPrimeField>(pt: &[F]) -> Option<Vec<F>> {
 
 pub fn eq_poly_sequence_from_multiplier_last<F: TPrimeField>(mul: F, pt: &[F]) -> Option<Vec<F>> {
     EQPolyEvaluator::from_multiplier(mul).last(pt)
+}
+
+// multivar poly
+pub fn evaluate_multivar<F: TPrimeField>(poly: &[F], pt: &[F]) -> F {
+    let e_p = eq_poly_sequence_last(&pt.to_vec()).unwrap();
+    poly.iter().zip_eq(e_p.iter()).map(|(&a, b)| a * b).fold(F::zero(), |x, y| x + y)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use ark_bn254::Fq as F;
+    use ark_std::{test_rng, UniformRand};
+    #[test]
+    fn test_from_evals() {
+        let rng = &mut test_rng();
+        let evals = (0..16).map(|_| F::rand(rng)).collect_vec();
+        let poly = from_evals(&evals);
+        for i in 0..16 {
+            assert!(evaluate_univar(&poly, &F::from(i as u64)) == evals[i]);
+        }
+    }
 }

@@ -35,10 +35,34 @@ impl<'a, T> Index<usize> for VerticalIndexing<'a, T> {
     }
 }
 
+pub trait AlgFnSoUtils<F: PolyOps>: AlgFnSO<F> {
+    fn map_so(&self, args: &[&[F]]) -> Vec<F>;
+}
+
+impl<F: PolyOps, Fun: AlgFnSO<F>> AlgFnSoUtils<F> for Fun {
+    fn map_so(&self, args: &[&[F]]) -> Vec<F> {
+        let n_ins = self.n_ins();
+        let n_outs = 1;
+
+        assert!(args.len() == n_ins);
+        let l = args[0].len();
+        for i in 1..n_ins {
+            assert!(args[i].len() == l)
+        }
+
+        let output = (0..l).map(|place|
+            self.exec(&VerticalIndexing{vecs: &args, place})
+        )
+            .collect_vec();
+        output
+    }
+}
+
 pub trait AlgFnUtils<F: PolyOps> : AlgFn<F> {
     fn map(&self, args: &[&[F]]) -> Vec<Vec<F>>;
     fn map_split_hi(&self, args: &[&[F]]) -> [Vec<Vec<F>>; 2];
 }
+
 impl<F: PolyOps, Fun: AlgFn<F>> AlgFnUtils<F> for Fun {
     fn map(&self, args: &[&[F]]) -> Vec<Vec<F>> {
         let n_ins = self.n_ins();
@@ -58,16 +82,16 @@ impl<F: PolyOps, Fun: AlgFn<F>> AlgFnUtils<F> for Fun {
             let mut res = self.exec(&VerticalIndexing{vecs: &args, place}).map(|x| Some(x)).collect_vec();
             for s in 0..n_outs {
                 output[s].push(res[s].take().unwrap());
-                assert_eq!(output.len(), place + 1);
+                assert_eq!(output[s].len(), place + 1);
             }
         }
-        
+
         output
         // todo: this ⤵ will require some persuasion, it attempts to move ptr, which is unmovable for some reason.
         // for i in 0..n_outs {
         //     output.push(UninitArr::<F>::new(l))
         // }
-        // 
+        //
         // let mut output_ptrs : Vec<_> = output.iter_mut().map(|o| o.as_shared_mut_ptr()).collect();
         // let ptr = output_ptrs.as_shared_mut_ptr();
         //
@@ -76,7 +100,7 @@ impl<F: PolyOps, Fun: AlgFn<F>> AlgFnUtils<F> for Fun {
         //         unsafe{*(*ptr.get_mut(s)).get_mut(place) = x;}
         //     });
         // });
-        // 
+        //
         // output.into_iter().map(|arr| unsafe{arr.assume_init()}).collect()
     }
 
@@ -90,29 +114,4 @@ impl<F: PolyOps, Fun: AlgFn<F>> AlgFnUtils<F> for Fun {
     }
 }
 
-#[derive(Clone)]
-pub struct FoldedAlgFn<F: PolyOps, Fun: AlgFn<F>> {
-    f: Fun,
-    gamma: F,
-}
 
-impl<F: PolyOps, Fun: AlgFn<F>> AlgFnSO<F> for FoldedAlgFn<F, Fun> {
-    fn exec(&self, args: &impl Index<usize, Output = F>) -> F {
-        let mut gamma_pow = self.gamma.clone();
-        let mut it = self.f.exec(args);
-        let mut ret = it.next().unwrap();
-        while let Some(v) = it.next() {
-            ret = ret + v * &gamma_pow;
-            gamma_pow = gamma_pow * &self.gamma;
-        }
-        ret
-    }
-
-    fn deg(&self) -> usize {
-        self.f.deg()
-    }
-
-    fn n_ins(&self) -> usize {
-        self.f.n_ins()
-    }
-}
