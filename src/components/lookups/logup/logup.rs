@@ -294,7 +294,7 @@ pub struct IndexedLookupInput<F: TPrimeField> {
     values: Vec<F>,
     accesses: Vec<F>,
     table: Vec<F>,
-    indexes: Vec<usize>,
+    indexes: Vec<F>,
 }
 
 pub struct SubsetLookupInput<F: TPrimeField> {
@@ -306,6 +306,32 @@ pub struct SubsetLookupInput<F: TPrimeField> {
 pub enum LookupInput<F: TPrimeField> {
     Indexed(IndexedLookupInput<F>),
     Subset(SubsetLookupInput<F>),
+}
+
+impl <F: TPrimeField> LookupInput<F> {
+    pub fn indexed_by_usize(table: Vec<F>, accesses: Vec<F>, values: Vec<F>, indexes: Vec<usize>) -> Self {
+        LookupInput::Indexed(IndexedLookupInput{
+            values,
+            accesses,
+            table,
+            indexes: indexes.into_iter().map(|x| F::from(x as u64)).collect_vec(),
+        })
+    }
+    pub fn indexed(table: Vec<F>, accesses: Vec<F>, values: Vec<F>, indexes: Vec<F>) -> Self {
+        LookupInput::Indexed(IndexedLookupInput{
+            values,
+            accesses,
+            table,
+            indexes,
+        })
+    }
+    pub fn subset(table: Vec<F>, accesses: Vec<F>, values: Vec<F>) -> Self {
+        LookupInput::Subset(SubsetLookupInput{
+            values,
+            accesses,
+            table,
+        })
+    }
 }
 
 #[derive(Eq, PartialEq, Clone, Debug)]
@@ -442,33 +468,27 @@ impl<F: TPrimeField, Dialect: TArithmeticDialect<F>> TProverImpl<Dialect> for Lo
         }).max();
         let c = advice.iter().map(|_| ctx.challenge()).collect_vec();
 
-        let mut gammas = None;
-        if let Some(max_table_size) = max_table_size {
-            let gamma = ctx.challenge();
-            let mut running_gamma = F::zero();
-            gammas = Some((0..max_table_size).map(|_| {
-                let res = running_gamma;
-                running_gamma = res + gamma.clone();
-                res
-            }).collect_vec());
+        let mut gamma = None;
+        if let Some(_) = max_table_size {
+            gamma = Some(ctx.challenge());
         }
 
         let data = advice.iter().enumerate().map(|(lookup_idx, lookup)| {
 
             match lookup {
                 LookupInput::Indexed(IndexedLookupInput{values, accesses, table, indexes}) => {
-                    let gammas = gammas.as_ref().unwrap();
+                    let gamma = gamma.as_ref().unwrap();
                     [
                         [
                             accesses.clone(),
                             table.iter().enumerate().map(|(i, t)| {
-                                *t + gammas[i] + c[lookup_idx]
+                                *t + *gamma * F::from(i as u64) + c[lookup_idx]
                             }).collect_vec()
                         ],
                         [
                             vec![-F::one(); values.len()],
                             values.iter().enumerate().map(|(i, x)| {
-                                *x + gammas[indexes[i]] + c[lookup_idx]
+                                *x + *gamma * indexes[i] + c[lookup_idx]
                             }).collect_vec()
                         ]
                     ]
@@ -521,7 +541,7 @@ impl<F: TPrimeField, Dialect: TArithmeticDialect<F>> TProverImpl<Dialect> for Lo
             };
             match lookup_type {
                 LookupInput::Indexed(IndexedLookupInput{ values, accesses, table, indexes}) => {
-                    let indexes_claim = evaluate_multivar(&indexes.iter().map(|i| F::from(*i as u64)).collect_vec(), &r_point);
+                    let indexes_claim = evaluate_multivar(&indexes, &r_point);
                     ctx.write(&indexes_claim);
                     let values_claim = rd_claim - c[lookup_index] + evaluate_index_poly(&r_point) * indexes_claim;
 
@@ -609,35 +629,34 @@ mod tests {
         ];
 
         let data = lookups.iter().map(|l| {
+            let (table_logsize, values_logsize) =match l {
+                LookupType::Indexed(a, b) => (a, b),
+                LookupType::Subset(a, b) => (a, b)
+            };
+            let table = (0..(1 << table_logsize)).map(|i| F::rand(rng)).collect_vec();
+            let indexes = (0..(1 << values_logsize)).map(|i| rng.next_u64() as usize % (1 << table_logsize) as usize).collect_vec();
+            let mut accesses = table.iter().map(|_|  F::zero()).collect_vec();
+            let values = indexes.iter().map(|i| {
+                accesses[*i] = accesses[*i] + F::one();
+                table[*i]
+            }).collect_vec();
+            let indexes = indexes.into_iter().map(|x| F::from(x as u64)).collect_vec();
+            
             match l {
                 LookupType::Indexed(table_logsize, values_logsize) => {
-                    let table = (0..(1 << table_logsize)).map(|i| F::rand(rng)).collect_vec();
-                    let indexes = (0..(1 << values_logsize)).map(|i| rng.next_u64() as usize % (1 << table_logsize) as usize).collect_vec();
-                    let mut accesses = table.iter().map(|_|  F::zero()).collect_vec();
-                    let values = indexes.iter().map(|i| {
-                        accesses[*i] = accesses[*i] + F::one();
-                        table[*i]
-                    }).collect_vec();
-                    LookupInput::Indexed(IndexedLookupInput{
-                        values,
-                        accesses,
+                    LookupInput::indexed(
                         table,
+                        accesses,
+                        values,
                         indexes,
-                    })
+                    )
                 }
                 LookupType::Subset(table_logsize, values_logsize) => {
-                    let table = (0..(1 << table_logsize)).map(|i| F::rand(rng)).collect_vec();
-                    let indexes = (0..(1 << values_logsize)).map(|i| rng.next_u64() as usize % (1 << table_logsize) as usize).collect_vec();
-                    let mut accesses = table.iter().map(|_|  F::zero()).collect_vec();
-                    let values = indexes.iter().map(|i| {
-                        accesses[*i] = accesses[*i] + F::one();
-                        table[*i]
-                    }).collect_vec();
-                    LookupInput::Subset(SubsetLookupInput{
-                        values,
-                        accesses,
+                    LookupInput::subset(
                         table,
-                    })
+                        accesses,
+                        values,
+                    )
                 }
             }
         }).collect_vec();
