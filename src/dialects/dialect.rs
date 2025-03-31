@@ -56,3 +56,58 @@ pub trait TFormalArithmeticDialect<F: TPrimeField>: TDialectInterface + TSupport
 pub trait TArithmeticDialect<F: PolyOps> : TDialectInterface + TTranscriptSupports<F> {}
 
 impl<F: TPrimeField, Dialect: TFormalArithmeticDialect<F>> TArithmeticDialect<Sig<F, Dialect>> for Dialect {}
+
+
+#[cfg(test)]
+pub mod tests {
+    use super::*;
+
+    pub struct ManualTestDialect<F: PolyOps> {
+        challenges: Vec<F>,
+        c_idx: usize,
+        data: Vec<F>,
+        d_idx: usize,
+    }
+    
+    impl<F: PolyOps> ManualTestDialect<F> {
+        pub fn new(challenges: Vec<F>) -> Self {
+            Self {
+                challenges,
+                c_idx: 0,
+                data: vec![],
+                d_idx: 0,
+            }
+        }
+        pub fn end(&mut self) {
+            self.c_idx = 0;
+        }
+    }
+    
+    impl<F: PolyOps> TDialectInterface for ManualTestDialect<F> {}
+    impl<F: PolyOps> TTranscriptSupports<F> for ManualTestDialect<F> {
+        fn _challenge(&mut self) -> F {
+            self.c_idx += 1;
+            self.challenges[self.c_idx - 1].clone()
+        }
+
+        fn _read(&mut self) -> F {
+            self.d_idx += 1;
+            self.data[self.d_idx - 1].clone()
+        }
+
+        fn _write(&mut self, value: &F) {
+            self.data.push(value.clone());
+        }
+
+        fn _unconstrained_read(&mut self) -> F {
+            self.d_idx += 1;
+            self.data[self.d_idx - 1].clone()
+        }
+
+        fn _unconstrained_write(&mut self, value: &F) {
+            self.data.push(value.clone());
+        }
+    }
+
+    impl<F: PolyOps> TArithmeticDialect<F> for ManualTestDialect<F> {}
+}

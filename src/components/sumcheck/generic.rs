@@ -3,6 +3,8 @@ use itertools::Itertools;
 
 use crate::{common::{algfn::AlgFnSO, math::{compress, decompress, evaluate_univar}, wrapper::{PolyOps, TPrimeField}}, dialects::dialect::TArithmeticDialect, protocol::component::{TProtocol, TProverImpl}};
 pub(crate) use crate::common::claims::{EvalClaim, SumClaim};
+use crate::common::claims::SinglePointClaims;
+use crate::components::sumcheck::dense_eq::DenseEqSumcheck;
 use super::sumcheckable::Sumcheckable;
 
 
@@ -70,4 +72,3 @@ impl<F: TPrimeField, Fun: AlgFnSO<F>, S: Sumcheckable<F>, Dialect: TArithmeticDi
         (EvalClaim{ev: sum_claim, point: rs}, final_evals)
     }
 }
-

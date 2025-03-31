@@ -225,4 +225,5 @@ mod tests {
 
         println!("{:?}", IRArithVerifier::<F>::decode(serialized_ops));
     }
+    
 }
