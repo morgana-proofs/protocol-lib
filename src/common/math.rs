@@ -226,6 +226,16 @@ pub fn evaluate_multivar<F: TPrimeField>(poly: &[F], pt: &[F]) -> F {
     poly.iter().zip_eq(e_p.iter()).map(|(&a, b)| a * b).fold(F::zero(), |x, y| x + y)
 }
 
+pub fn evaluate_index_poly<F: TPrimeField>(pt: &[F]) -> F {
+    let mut c = F::one();
+    pt.iter().map(|x| {
+        let res = *x * c;
+        c = c.double();
+        res
+    }).fold(F::zero(), |x, y| x + y)
+    
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
