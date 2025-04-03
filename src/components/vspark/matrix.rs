@@ -91,40 +91,23 @@ impl<const p: usize> AdmSubset<p> {
         Ok(bounds.1 - bounds.0)
     }
 
-    pub fn encode(&self) -> usize {
-        if self.u == 0 {
-            ((self.a << (p + 1)) + 1) << self.k
-        } else if self.k == 0 {
-            2 * ((1 << p) * self.a + self.u) + 1
-        } else {
-            panic!("Unsound data")
-        }
+    fn encode(&self) -> usize {
+        let Self{a, u, k, ..} = self; // l is not needed
+
+        (2 * ((1 << p) * a + u) + 1) * (1usize << k)
     }
-    
+
     pub fn decode(mut code: usize) -> Option<Self> {
         if code == 0 {
             None
-        } else if code % 2 == 0 {
+        } else {
             let k = code.trailing_zeros() as usize;
             code >>= k + 1;
-            if (code.trailing_zeros() as usize) < p {
-                None
-            } else {
-                let a = code >> p;
-                Some(Self {
-                    a,
-                    k,
-                    u: 0,
-                    l: 0,
-                })
-            }
-        } else {
-            code >>= 1;
             let a = code >> p;
             let u = code & ((1 << p) - 1);
             Some(Self {
                 a,
-                k: 0,
+                k,
                 u,
                 l: 0,
             })
@@ -418,14 +401,13 @@ mod tests {
         let dense_sliced = sliced.as_rowwise_dense(sliced.len() - 1);
         assert_eq!(dense_sliced, dense);
     }
-    
+
     #[test]
     fn test_encodings() {
-        AdmSubset::<3>::decode(0);
         for i in 0usize..100 {
             AdmSubset::<3>::decode(i).map(|x| {
                 let res = AdmSubset::encode(&x);
-                assert_eq!(i, res, "{}, {}, {}", i, x, res)
+                assert_eq!(i, res, "{}, {}, {}", i, x, res);
             });
         }
     }

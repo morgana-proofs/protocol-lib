@@ -336,10 +336,10 @@ impl <F: TPrimeField> LookupInput<F> {
 
 #[derive(Eq, PartialEq, Clone, Debug)]
 pub struct IndexedLookupClaim<F: TPrimeField> {
-    accesses: EvalClaim<F>,
-    table: EvalClaim<F>,
-    values: EvalClaim<F>,
-    indexes: EvalClaim<F>,
+    pub accesses: EvalClaim<F>,
+    pub table: EvalClaim<F>,
+    pub values: EvalClaim<F>,
+    pub indexes: EvalClaim<F>,
 }
 
 #[derive(Eq, PartialEq, Clone, Debug)]
@@ -372,14 +372,10 @@ impl<F: TPrimeField> Logup<F> {
             _pd: PhantomData,
         }
     }
-
-    pub fn make_claim() -> SumClaim<F> {
-        SumClaim(F::zero())
-    }
 }
 
 impl<F: TPrimeField, Dialect: TArithmeticDialect<F>> TProtocol<Dialect> for Logup<F> {
-    type ClaimsBefore = SumClaim<F>;
+    type ClaimsBefore = ();
     type ClaimsAfter = Vec<LookupClaim<F>>;
 
     fn verify(&self, ctx: &mut Dialect, claims: Self::ClaimsBefore) -> Self::ClaimsAfter {
@@ -408,7 +404,7 @@ impl<F: TPrimeField, Dialect: TArithmeticDialect<F>> TProtocol<Dialect> for Logu
                 [table, lookup]
             }
         }).flatten().cloned().collect_vec());
-        let claims = mainphase.verify(ctx, claims);
+        let claims = mainphase.verify(ctx, SumClaim(F::zero()));
 
         let claims = claims.into_iter().chunks(2).into_iter().enumerate().zip(self.lookups.iter()).map(|((lookup_index, chunk), lookup_type)| {
             let [lc, rc]: [SinglePointClaims<F>; 2] = chunk.collect_vec().try_into().unwrap();
@@ -520,7 +516,7 @@ impl<F: TPrimeField, Dialect: TArithmeticDialect<F>> TProverImpl<Dialect> for Lo
                 [table, lookup]
             }
         }).flatten().cloned().collect_vec());
-        let (claims, _) = mainphase.prove::<LogupMainphase<_,>>(ctx, claims, data);
+        let (claims, _) = mainphase.prove::<LogupMainphase<_,>>(ctx, SumClaim(F::zero()), data);
         let claims = claims.into_iter().chunks(2).into_iter().enumerate().zip(advice).map(|((lookup_index, chunk), lookup_type)| {
             let [lc, rc]: [SinglePointClaims<F>; 2] = chunk.collect_vec().try_into().unwrap();
             let ln_claim = lc.evs[0];
@@ -641,7 +637,7 @@ mod tests {
                 table[*i]
             }).collect_vec();
             let indexes = indexes.into_iter().map(|x| F::from(x as u64)).collect_vec();
-            
+
             match l {
                 LookupType::Indexed(table_logsize, values_logsize) => {
                     LookupInput::indexed(
@@ -663,12 +659,10 @@ mod tests {
 
         let proto = Logup::new(lookups);
 
-        let claims = Logup::make_claim();
-
         let mut ctx = ManualTestDialect::new((0..1000).map(|_| F::rand(rng)).collect_vec());
-        let (pclaims, _) = proto.prove::<Logup<_,>>(&mut ctx, claims.clone(), data);
+        let (pclaims, _) = proto.prove::<Logup<_,>>(&mut ctx, (), data);
         ctx.end();
-        let vclaims = proto.verify(&mut ctx, claims);
+        let vclaims = proto.verify(&mut ctx, ());
 
         assert_eq!(pclaims, vclaims);
     }

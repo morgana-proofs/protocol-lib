@@ -1,0 +1,285 @@
+use std::cmp::min;
+use rayon::iter::ParallelIterator;
+use std::iter::{once, repeat_n};
+use std::marker::PhantomData;
+use std::ops::Index;
+use itertools::Itertools;
+use rayon::current_num_threads;
+use rayon::prelude::IntoParallelIterator;
+use crate::common::algfn::{AlgFn, AlgFnSO};
+use crate::common::claims::{EvalClaim, SinglePointClaims, SumClaim};
+use crate::common::math::{bind_dense_poly, eq_poly_sequence_last, evaluate_univar, from_evals};
+use crate::common::wrapper::{PolyOps, TPrimeField};
+use crate::components::lookups::logup::logup::LogupMainphase;
+use crate::components::sumcheck::algfn_wrappers::{EqWrapper, GammaWrapper};
+use crate::components::sumcheck::dense_eq::{eq_eval, gamma_rlc, DenseSumcheckableSO};
+use crate::components::sumcheck::generic::{SumcheckGenericProverImpl, SumcheckProtocol};
+use crate::components::sumcheck::sumcheckable::{FoldToSumcheckable, Sumcheckable};
+use crate::dialects::dialect::TArithmeticDialect;
+use crate::protocol::component::{TProtocol, TProverImpl};
+
+
+pub struct MultiDenseEqSumcheck<F: TPrimeField> {
+    pub num_vars: usize,
+    _pd: PhantomData<F>,
+}
+
+
+impl<F: TPrimeField> MultiDenseEqSumcheck<F> {
+    pub fn new(num_vars: usize) -> Self {
+        Self { num_vars, _pd: PhantomData }
+    }
+}
+
+
+#[derive(Clone)]
+pub struct MultiPointEvalClaimPart<F> {
+    poly_id: usize,
+    point_id: usize,
+    ev: F
+}
+
+#[derive(Clone)]
+pub struct MultiPointEvalClaim<F> {
+    points: Vec<Vec<F>>,
+    evals: Vec<MultiPointEvalClaimPart<F>>,
+}
+
+
+#[derive(Clone)]
+pub struct MultiPointCombinator<F: TPrimeField> {
+    sizes: Vec<usize>,
+    gammas: Vec<F>
+}
+impl<F: TPrimeField> MultiPointCombinator<F> {
+    pub fn new(sizes: Vec<usize>, gammas: Vec<F>) -> Self {
+        Self { sizes, gammas }
+    }
+}
+
+impl<F: TPrimeField> AlgFnSO<F> for MultiPointCombinator<F> {
+    fn exec(&self, args: &impl Index<usize, Output=F>) -> F {
+        let mut i = 0;
+        self.sizes.iter().zip_eq(self.gammas.iter()).map(|(size, gamma)| {
+            let res = (0..*size)
+                .map(|_| {
+                    let res = args[i];
+                    i += 1;
+                    res
+                })
+                .reduce(|l, r| l + r).unwrap() * args[i];
+            i += 1;
+            res * *gamma
+        }).reduce(|l, r| l + r).unwrap()
+    }
+
+    fn deg(&self) -> usize {
+        2
+    }
+
+    fn n_ins(&self) -> usize {
+        self.sizes.len() + self.sizes.iter().sum::<usize>()
+    }
+}
+
+impl <F: TPrimeField, Dialect: TArithmeticDialect<F>> TProtocol<Dialect> for MultiDenseEqSumcheck<F> {
+    type ClaimsBefore = MultiPointEvalClaim<F>;
+    type ClaimsAfter = SinglePointClaims<F>;
+
+
+    fn verify(&self, ctx: &mut Dialect, claims: Self::ClaimsBefore) -> Self::ClaimsAfter {
+        let MultiPointEvalClaim { points, evals } = claims;
+
+        let evals = evals.into_iter().enumerate()
+            .sorted_by(|(_, a), (_, b)| {a.point_id.cmp(&b.point_id)})
+            .chunk_by(|(_, e)| e.point_id).into_iter()
+            .map(|(key, evs)| {
+                (key, evs.collect_vec())
+            })
+            .collect_vec();
+        let gamma = ctx.challenge();
+
+        let gammas = once(gamma).chain((1..evals.len()).scan(gamma, |acc, i| {
+            Some(*acc)
+        })).collect_vec();
+
+        let folded_claim = gammas.iter().zip_eq(evals.iter()).map(|(gamma_pow, (_, claims))| {
+            claims.iter().map(|(_, claim)| {
+                claim.ev * gamma_pow
+            }).fold(F::zero(), |acc, ev| acc + ev)
+        }).fold(F::zero(), |acc, ev| acc + ev);
+
+        let f = MultiPointCombinator::new(evals.iter().map(|(_, x)| x.len()).collect_vec(), gammas);
+
+        let generic_protocol_config = SumcheckProtocol::new(f.clone(), self.num_vars);
+
+        let EvalClaim{ ev, point: output_point } = generic_protocol_config.verify(ctx, SumClaim(folded_claim));
+
+        let poly_evs = (0..f.n_ins() - evals.len()).map(|_| ctx.read()).collect_vec();
+
+        println!("{:?}", poly_evs);
+
+        let mut i = 0;
+        assert_eq!(
+            ev,
+            f.exec(
+                &evals.iter().map(|(point_id, evs)| {
+                    let res = poly_evs[i..(i + evs.len())].iter().cloned().chain(once(eq_eval(&points[*point_id], &output_point)));
+                    i += evs.len();
+                    res
+                }).flatten().collect_vec()
+            ),
+            "Final combinator check has failed."
+        );
+
+        SinglePointClaims {
+            point: output_point,
+            evs: poly_evs.into_iter()
+                .zip_eq(evals.iter().map(|(_, eval)| {eval.iter().map(|(i, _)| i)}).flatten())
+                .sorted_by(|&(_, x), &(_, y)| {x.cmp(&y)})
+                .map(|(v, _)| v)
+                .collect_vec(),
+        }
+    }
+}
+
+impl<F: TPrimeField, Dialect: TArithmeticDialect<F>> TProverImpl<Dialect> for MultiDenseEqSumcheck<F> {
+    type Verifier = Self;
+    type ProverInput = Vec<Vec<F>>;
+    type ProverOutput = ();
+
+    fn _prove(protocol: &Self::Verifier, ctx: &mut Dialect, claims: <Self as TProtocol<Dialect>>::ClaimsBefore, advice: Self::ProverInput) -> (<Self as TProtocol<Dialect>>::ClaimsAfter, Self::ProverOutput) {
+
+        let MultiPointEvalClaim { points, evals } = claims;
+
+        let (evals, polys): (Vec<(usize, Vec<(usize, MultiPointEvalClaimPart<F>)>)>, Vec<(usize, Vec<Vec<F>>)>) = evals.into_iter().zip_eq(advice.into_iter()).enumerate()
+            .sorted_by(|(_, (a, _)), (_, (b, _))| {a.point_id.cmp(&b.point_id)})
+            .chunk_by(|(_, (e,_))| e.point_id).into_iter()
+            .map(|(key, evs)| {
+                let (claims, polys): (Vec<(usize, MultiPointEvalClaimPart<F>)>, Vec<Vec<F>>) = evs.map(|(idx, (claim, data))| {
+                    ((idx, claim), data)
+                }).unzip();
+                ((key, claims), (key, polys))
+            }).unzip();
+        let gamma = ctx.challenge();
+
+        let gammas = once(gamma).chain((1..evals.len()).scan(gamma, |acc, i| {
+            Some(*acc)
+        })).collect_vec();
+
+        let folded_claim = gammas.iter().zip_eq(evals.iter()).map(|(gamma_pow, (_, claims))| {
+            claims.iter().map(|(_, claim)| {
+                claim.ev * gamma_pow
+            }).fold(F::zero(), |acc, ev| acc + ev)
+        }).fold(F::zero(), |acc, ev| acc + ev);
+
+
+        let f = MultiPointCombinator::new(evals.iter().map(|(_, x)| x.len()).collect_vec(), gammas);
+
+
+        let so = DenseSumcheckableSO::<F, MultiPointCombinator<F>>::new(
+            polys.into_iter()
+                .map(|(point_idx, polys)| {
+                    polys.into_iter()
+                        .chain(once(eq_poly_sequence_last(&points[point_idx]).unwrap()))
+                })
+                .flatten()
+                .collect_vec(),
+            f.clone(),
+            protocol.num_vars,
+            folded_claim
+        );
+
+        let generic_protocol_config = SumcheckProtocol::new(
+            f.clone(),
+            protocol.num_vars,
+        );
+
+        let (
+            EvalClaim{point: output_point, ev},
+            mut poly_evs,
+        ) = generic_protocol_config.prove::<SumcheckGenericProverImpl<_, _, _>>(
+            ctx,
+            SumClaim(so.claim),
+            so,
+        );
+
+        assert_eq!(
+            ev,
+            f.exec(
+                &poly_evs
+            ),
+            "Final combinator check has failed."
+        );
+
+
+        let mut i = 0;
+        for (_, group) in evals.iter() {
+            for _ in 0..group.len() {
+                ctx.write(&poly_evs[i]);
+                i += 1
+            }
+            poly_evs.remove(i);
+        }
+
+
+        (SinglePointClaims {
+            point: output_point,
+            evs: poly_evs.into_iter()
+                .zip_eq(evals.iter().map(|(_, eval)| {eval.iter().map(|(i, _)| i)}).flatten())
+                .sorted_by(|&(_, x), &(_, y)| {x.cmp(&y)})
+                .map(|(v, _)| v)
+                .collect_vec(),
+        }, ())
+}
+
+    }
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::dialects::dialect::tests::ManualTestDialect;
+    use ark_bn254::Fq as F;
+    use ark_ff::Field;
+    use ark_std::{test_rng, UniformRand};
+    use ark_std::rand::Rng;
+    use num_traits::{One, Zero};
+    use crate::common::math::evaluate_multivar;
+    #[test]
+    fn verifier_accepts_prover() {
+        let rng = &mut test_rng();
+        let logsize = 6;
+        let points   : Vec<Vec<F>> = (0..7).map(|_| (0..logsize).map(|_| F::rand(rng)).collect()).collect();
+        let polys    : Vec<Vec<F>> = (0..7).map(|_| (0 .. 1 << logsize).map(|_|F::rand(rng)).collect()).collect();
+        let point_ids: Vec<usize>  = (0..polys.len()).map(|i| i).collect();
+        let point_ids: Vec<usize>  = (0..polys.len()).map(|_| rng.gen::<usize>() % points.len()).collect();
+
+        let evals = polys.iter().zip_eq(point_ids.iter()).enumerate().map(|(poly_id, (poly, &point_id))| {
+            MultiPointEvalClaimPart{
+                poly_id,
+                point_id,
+                ev: evaluate_multivar(poly, &points[point_id]),
+            }
+        }).collect_vec();
+
+        let claim = MultiPointEvalClaim {
+            points: points.clone(),
+            evals,
+        };
+
+        let sumcheck = MultiDenseEqSumcheck::new(logsize);
+
+        let mut transcript_p = ManualTestDialect::new((0..1000).map(|_| F::rand(rng)).collect_vec());
+
+        let (output_claims, _) = sumcheck.prove::<MultiDenseEqSumcheck<_,>>(&mut transcript_p, claim.clone(), polys.clone());
+
+        let proof = transcript_p.end();
+        let mut transcript_v = transcript_p;
+
+        let expected_output_claims = sumcheck.verify(&mut transcript_v, claim);
+
+        assert_eq!(output_claims, expected_output_claims);
+
+        let SinglePointClaims { point : new_point, evs } = output_claims;
+        assert_eq!(polys.iter().map(|poly| evaluate_multivar(poly, &new_point)).collect_vec(), evs);
+    }
+}
