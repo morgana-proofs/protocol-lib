@@ -11,8 +11,8 @@ use super::sumcheckable::Sumcheckable;
 /// A sumcheck with single output, without eq multiplier.
 #[derive(Clone)]
 pub struct SumcheckProtocol<F: PolyOps, Fun: AlgFnSO<F>> {
-    f: Fun,
-    num_vars: usize,
+    pub(crate) f: Fun,
+    pub(crate) num_vars: usize,
     _marker: PhantomData<F>,
 }
 

@@ -38,11 +38,25 @@ pub struct MultiPointEvalClaimPart<F> {
     point_id: usize,
     ev: F
 }
+impl<F: TPrimeField> MultiPointEvalClaimPart<F> {
+    pub fn new(poly_id: usize, point_id: usize, ev: F) -> Self {
+        Self { poly_id, point_id, ev }
+    }
+}
 
 #[derive(Clone)]
 pub struct MultiPointEvalClaim<F> {
     points: Vec<Vec<F>>,
     evals: Vec<MultiPointEvalClaimPart<F>>,
+}
+
+impl <F: TPrimeField> MultiPointEvalClaim<F> {
+    pub fn new(points: Vec<Vec<F>>, evals: Vec<MultiPointEvalClaimPart<F>>) -> Self {
+        Self {
+            points,
+            evals,
+        }
+    }
 }
 
 
