@@ -8,7 +8,8 @@ use crate::common::wrapper::TPrimeField;
 
 
 #[derive(Debug, Default, Copy, Clone)]
-pub struct AdmSubset<const p: usize> {
+pub struct AdmSubset {
+    p: usize,
     a: usize,
     k: usize,
     u: usize,
@@ -17,6 +18,7 @@ pub struct AdmSubset<const p: usize> {
 
 #[derive(Debug, Default, Copy, Clone)]
 pub struct _AdmSubset {
+    p: usize,
     a: usize,
     k: usize,
     u: usize,
@@ -26,29 +28,29 @@ pub struct _AdmSubset {
 macro_rules! AdmSubset {
     {$($field:ident: $value:expr),* $(,)?} => {
         {
-        let $crate::components::vspark::matrix::_AdmSubset{a, k, u, l} = $crate::components::vspark::matrix::_AdmSubset {
+        let $crate::components::vspark::matrix::_AdmSubset{p, a, k, u, l} = $crate::components::vspark::matrix::_AdmSubset {
             $(
                 $field: $value,
             )*
             ..Default::default()
         };
-        $crate::components::vspark::matrix::AdmSubset::new(a, k, u, l)
+        $crate::components::vspark::matrix::AdmSubset::new(p, a, k, u, l)
         }
     }
 }
 
-impl<const p: usize> AdmSubset<p> {
-    pub fn new_unchecked(a: usize, k: usize, u: usize, l: usize) -> Self {
-        Self {a, k, u, l}
+impl AdmSubset {
+    pub fn new_unchecked(p: usize, a: usize, k: usize, u: usize, l: usize) -> Self {
+        Self {p, a, k, u, l}
     }
-    pub fn new(a: usize, k: usize, u: usize, l: usize) -> Self {
+    pub fn new(p: usize, a: usize, k: usize, u: usize, l: usize) -> Self {
         assert!(
             (u == 0) && (l == (1 << (k + p))) || (u + l <= (1 << p)) && (k == 0)
         );
-        Self::new_unchecked(a, k, u, l)
+        Self::new_unchecked(p, a, k, u, l)
     }
 
-    pub fn starting_at(start: usize, len: usize) -> Self {
+    pub fn starting_at(p: usize, start: usize, len: usize) -> Self {
         let page = 1 << p;
         let k = if len >= page {
             log2(len) as usize - p
@@ -59,6 +61,7 @@ impl<const p: usize> AdmSubset<p> {
         let u = start % page;
         assert_eq!(a * (page << k) + u, start);
         Self::new(
+            p,
             a,
             k,
             u,
@@ -66,8 +69,9 @@ impl<const p: usize> AdmSubset<p> {
         )
     }
 
-    pub fn fill(l: &AdmLen<p>) -> Self {
+    pub fn fill(l: &AdmLen, p: usize) -> Self {
         Self{
+            p,
             a: 0,
             k: (log2(l.length()) as usize) - p,
             u: 0,
@@ -76,11 +80,11 @@ impl<const p: usize> AdmSubset<p> {
     }
 
     pub fn bounds(&self) -> Result<(usize, usize), String> {
-        let Self{a, k, u, l} = self;
+        let Self{p, a, k, u, l} = self;
         if (*u == 0) && (*l == (1 << (k + p))) {
             Ok((a * (1 << (k + p)), (a + 1) * (1 << (k + p))))
         } else if (u + l <= (1 << p)) && (*k == 0) {
-            Ok((a * (1 << p) + u, a * (1 << p) + u + l))
+            Ok((a * (1usize << p) + u, a * (1usize << p) + u + l))
         } else {
             Err("Unsound data".to_string())
         }
@@ -91,13 +95,13 @@ impl<const p: usize> AdmSubset<p> {
         Ok(bounds.1 - bounds.0)
     }
 
-    fn encode(&self) -> usize {
+    fn encode(&self, p: usize) -> usize {
         let Self{a, u, k, ..} = self; // l is not needed
 
         (2 * ((1 << p) * a + u) + 1) * (1usize << k)
     }
 
-    pub fn decode(mut code: usize) -> Option<Self> {
+    pub fn decode(p: usize, mut code: usize) -> Option<Self> {
         if code == 0 {
             None
         } else {
@@ -106,6 +110,7 @@ impl<const p: usize> AdmSubset<p> {
             let a = code >> p;
             let u = code & ((1 << p) - 1);
             Some(Self {
+                p,
                 a,
                 k,
                 u,
@@ -115,80 +120,88 @@ impl<const p: usize> AdmSubset<p> {
     }
 }
 
-pub fn build_complete_eq_table<const p: usize>(total_logisze: usize) {
+pub fn build_tau_table(p: usize, total_logisze: usize) {
 
 }
 
-impl<const p: usize> Display for AdmSubset<p> {
+impl Display for AdmSubset{
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        f.write_fmt(format_args!("AdmSubset<{}>(a: {}, k: {}, u: {}, l: {})", p, self.a, self.k, self.u, self.l))
+        f.write_fmt(format_args!("AdmSubset<{}>(a: {}, k: {}, u: {}, l: {})", self.p, self.a, self.k, self.u, self.l))
     }
 }
 
 #[derive(Debug, Default, Ord, PartialOrd, Eq, PartialEq, Copy, Clone)]
-pub struct AdmLen<const p: usize> (usize);
+pub struct AdmLen {
+    p: usize,
+    l: usize,
+}
 
-impl<const p: usize> AdmLen<p> {
-    pub fn new(l: usize) -> Self {
+impl AdmLen {
+    pub fn new(p: usize, l: usize) -> Self {
         assert!(l <= (1 << p) || l % (1 << p) == 0);
-        Self(l)
+        Self{p, l}
     }
     pub fn length(&self) -> usize {
-        self.0
+        self.l
     }
 }
 
-impl<const p: usize> Display for AdmLen<p> {
+impl Display for AdmLen {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        f.write_fmt(format_args!("AdmLen<{}>({})", p, self.0))
+        f.write_fmt(format_args!("AdmLen<{}>({})", self.p, self.l))
     }
 }
 
-pub fn belongs<const p: usize>(subset: &AdmSubset<p>, set: AdmLen<p>) -> bool {
-    subset.bounds().unwrap().1 < set.0
+pub fn belongs(subset: &AdmSubset, set: AdmLen) -> bool {
+    subset.bounds().unwrap().1 < set.l
 }
 
 #[derive(Debug, Default)]
-pub struct VsparkRecDescr<const px: usize, const py: usize, F: TPrimeField> {
+pub struct VsparkRecDescr<F: TPrimeField> {
     id: usize,
     coeff: F,
-    x: AdmSubset<px>,
-    y: AdmSubset<py>,
+    x: AdmSubset,
+    y: AdmSubset,
 }
 
-impl<const px: usize, const py: usize, F: TPrimeField> VsparkRecDescr<px, py, F> {
-    pub fn new(id: usize, coeff: F, x: AdmSubset<px>, y: AdmSubset<py>) -> Self {
+impl<F: TPrimeField> VsparkRecDescr<F> {
+    pub fn new(id: usize, coeff: F, x: AdmSubset, y: AdmSubset) -> Self {
         Self {id, coeff, x, y}
     }
 }
 
 #[derive(Debug, Default)]
-pub struct VsparkMatrix<const px: usize, const py: usize, F: TPrimeField> {
-    x: AdmLen<px>,
-    y: AdmLen<py>,
-    submatrices: Vec<VsparkRecDescr<px, py, F>>,
+pub struct VsparkMatrix<F: TPrimeField> {
+    px: usize,
+    x: AdmLen,
+    py: usize,
+    y: AdmLen,
+    submatrices: Vec<VsparkRecDescr<F>>,
 }
 
-impl <const px: usize, const py: usize, F: TPrimeField> VsparkMatrix<px, py, F> {
-    pub fn new(x: AdmLen<px>, y: AdmLen<py>, submatrices: Vec<VsparkRecDescr<px, py, F>>) -> Self {
-        Self { x, y, submatrices }
+impl <F: TPrimeField> VsparkMatrix<F> {
+    pub fn new(px: usize, x: AdmLen, py: usize, y: AdmLen, submatrices: Vec<VsparkRecDescr<F>>) -> Self {
+        assert!(px == x.p && py == y.p);
+        Self { px, py, x, y, submatrices }
     }
 }
 
 #[derive(Debug, Default)]
-pub struct VsparkMatrixGroup<const px: usize, const py: usize, F: TPrimeField> {
-    m: Vec<VsparkMatrix<px, py, F>>,
+pub struct VsparkMatrixGroup<F: TPrimeField> {
+    m: Vec<VsparkMatrix<F>>,
 }
 
-impl <const px: usize, const py: usize, F: TPrimeField> VsparkMatrixGroup<px, py, F> {
-    pub fn new(m: Vec<VsparkMatrix<px, py, F>>) -> Self {
+impl <F: TPrimeField> VsparkMatrixGroup<F> {
+    pub fn new(m: Vec<VsparkMatrix<F>>) -> Self {
         Self { m }
     }
 
-    pub fn trivial() -> Self {
-        Self::new(vec![VsparkMatrix::<px, py, F>{
-            x: AdmLen::new(1),
-            y: AdmLen::new(1),
+    pub fn trivial(px: usize, py: usize) -> Self {
+        Self::new(vec![VsparkMatrix::<F>{
+            px,
+            x: AdmLen::new(px, 1),
+            py,
+            y: AdmLen::new(py, 1),
             submatrices: vec![],
         }])
     }
@@ -206,7 +219,7 @@ impl <const px: usize, const py: usize, F: TPrimeField> VsparkMatrixGroup<px, py
         true
     }
 
-    pub fn push(&mut self, matrix: VsparkMatrix<px, py, F>) {
+    pub fn push(&mut self, matrix: VsparkMatrix<F>) {
         self.m.push(matrix);
     }
     
@@ -248,7 +261,9 @@ impl <const px: usize, const py: usize, F: TPrimeField> VsparkMatrixGroup<px, py
             while matrix.submatrices.len() > (1 << h) {
                 let submatrix_chunk = matrix.submatrices.split_off(matrix.submatrices.len() - (1 << h));
                 let addition = VsparkMatrix{
+                    px: matrix.px,
                     x: matrix.x,
+                    py: matrix.py,
                     y: matrix.y,
                     submatrices: submatrix_chunk,
                 };
@@ -256,12 +271,14 @@ impl <const px: usize, const py: usize, F: TPrimeField> VsparkMatrixGroup<px, py
                     id: result.len(),
                     coeff: F::one(),
                     x: AdmSubset!{
+                        p: matrix.px,
                         a: 0,
                         k: 0,
                         u: 0,
                         l: matrix.x.length(),
                     },
-                    y: AdmSubset{
+                    y: AdmSubset!{
+                        p: matrix.py,
                         a: 0,
                         k: 0,
                         u: 0,
@@ -284,82 +301,90 @@ mod tests {
 
     #[test]
     fn test_as_rowwise_dense() {
-        fn build_test<const p: usize>() -> VsparkMatrixGroup::<p, p, F> {
-            VsparkMatrixGroup::<p, p, F>::new(vec![
+        fn build_test(px: usize, py: usize) -> VsparkMatrixGroup::<F> {
+            VsparkMatrixGroup::<F>::new(vec![
                 VsparkMatrix{
-                    x: AdmLen::new(1),
-                    y: AdmLen::new(1),
+                    px,
+                    x: AdmLen::new(px, 1),
+                    py,
+                    y: AdmLen::new(py, 1),
                     submatrices: vec![],
                 },
                 VsparkMatrix{
-                    x: AdmLen::new(2),
-                    y: AdmLen::new(2),
+                    px,
+                    x: AdmLen::new(px,2),
+                    py,
+                    y: AdmLen::new(py, 2),
                     submatrices: vec![
                         VsparkRecDescr{
                             id: 0,
                             coeff: <F as From<u64>>::from(1),
-                            x: AdmSubset::starting_at(0, 1),
-                            y: AdmSubset::starting_at(0, 1),
+                            x: AdmSubset::starting_at(px, 0, 1),
+                            y: AdmSubset::starting_at(py, 0, 1),
                         },
                         VsparkRecDescr{
                             id: 0,
                             coeff: <F as From<u64>>::from(1),
-                            x: AdmSubset::starting_at(1, 1),
-                            y: AdmSubset::starting_at(0, 1),
+                            x: AdmSubset::starting_at(px, 1, 1),
+                            y: AdmSubset::starting_at(py, 0, 1),
                         },
                         VsparkRecDescr{
                             id: 0,
                             coeff: <F as From<u64>>::from(2),
-                            x: AdmSubset::starting_at(1, 1),
-                            y: AdmSubset::starting_at(1, 1),
+                            x: AdmSubset::starting_at(px, 1, 1),
+                            y: AdmSubset::starting_at(py, 1, 1),
                         }
                     ],
                 },
                 VsparkMatrix{
-                    x: AdmLen::new(4),
-                    y: AdmLen::new(2),
+                    px,
+                    x: AdmLen::new(px, 4),
+                    py,
+                    y: AdmLen::new(py, 2),
                     submatrices: vec![
                         VsparkRecDescr{
                             id: 1,
                             coeff: <F as From<u64>>::from(3),
-                            x: AdmSubset::starting_at(0, 2),
-                            y: AdmSubset::starting_at(0, 2),
+                            x: AdmSubset::starting_at(px,0, 2),
+                            y: AdmSubset::starting_at(py, 0, 2),
                         },
                         VsparkRecDescr{
                             id: 1,
                             coeff: <F as From<u64>>::from(4),
-                            x: AdmSubset::starting_at(2, 2),
-                            y: AdmSubset::starting_at(0, 2),
+                            x: AdmSubset::starting_at(px, 2, 2),
+                            y: AdmSubset::starting_at(py, 0, 2),
                         },
                     ],
                 },
                 VsparkMatrix{
-                    x: AdmLen::new(8),
-                    y: AdmLen::new(8),
+                    px,
+                    x: AdmLen::new(px, 8),
+                    py,
+                    y: AdmLen::new(py, 8),
                     submatrices: vec![
                         VsparkRecDescr{
                             id: 2,
                             coeff: <F as From<u64>>::from(5),
-                            x: AdmSubset::starting_at(0, 4),
-                            y: AdmSubset::starting_at(0, 2),
+                            x: AdmSubset::starting_at(px, 0, 4),
+                            y: AdmSubset::starting_at(py, 0, 2),
                         },
                         VsparkRecDescr{
                             id: 2,
                             coeff: <F as From<u64>>::from(6),
-                            x: AdmSubset::starting_at(2, 4),
-                            y: AdmSubset::starting_at(3, 2),
+                            x: AdmSubset::starting_at(px, 2, 4),
+                            y: AdmSubset::starting_at(py, 3, 2),
                         },
                         VsparkRecDescr{
                             id: 2,
                             coeff: <F as From<u64>>::from(7),
-                            x: AdmSubset::starting_at(4, 4),
-                            y: AdmSubset::starting_at(6, 2),
+                            x: AdmSubset::starting_at(px, 4, 4),
+                            y: AdmSubset::starting_at(py, 6, 2),
                         },
                     ],
                 }
             ])
         }
-        let grp = build_test::<3>();
+        let grp = build_test(3, 3);
         grp.valid();
         let dense = grp.as_rowwise_dense(3);
         println!("{}", dense.iter().map(|row| {row.iter().map(|e| format!("{: >4}", format!("{:?}", e))).join(", ")}).join("\n"));
@@ -377,17 +402,21 @@ mod tests {
 
     #[test]
     fn test_slicing_matrix() {
-        fn build_test(logsize: usize) -> VsparkMatrixGroup::<16, 16, F> {
+        fn build_test(logsize: usize) -> VsparkMatrixGroup::<F> {
             let size = 1 << logsize;
-            let mut res = VsparkMatrixGroup::<16, 16, F>::trivial();
+            let px = 16;
+            let py = 16;
+            let mut res = VsparkMatrixGroup::<F>::trivial(px, py);
             res.push(VsparkMatrix{
-                x: AdmLen::new(size),
-                y: AdmLen::new(size),
+                px,
+                x: AdmLen::new(px, size),
+                py,
+                y: AdmLen::new(py, size),
                 submatrices: (0..size).map(|i| (0..size).map(move |j| VsparkRecDescr{
                     id: 0,
                     coeff: <F as From<u64>>::from((i * size + j) as u64),
-                    x: AdmSubset::starting_at(j, 1),
-                    y: AdmSubset::starting_at(i, 1),
+                    x: AdmSubset::starting_at(px, j, 1),
+                    y: AdmSubset::starting_at(py, i, 1),
                 })).flatten().collect_vec(),
             });
             res
@@ -404,9 +433,10 @@ mod tests {
 
     #[test]
     fn test_encodings() {
+        let p = 3;
         for i in 0usize..100 {
-            AdmSubset::<3>::decode(i).map(|x| {
-                let res = AdmSubset::encode(&x);
+            AdmSubset::decode(p, i).map(|x| {
+                let res = x.encode(p);
                 assert_eq!(i, res, "{}, {}, {}", i, x, res);
             });
         }
