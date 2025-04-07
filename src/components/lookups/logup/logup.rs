@@ -291,16 +291,16 @@ impl<F: TPrimeField, Dialect: TArithmeticDialect<F>> TProverImpl<Dialect> for Lo
 }
 
 pub struct IndexedLookupInput<F: TPrimeField> {
-    values: Vec<F>,
-    accesses: Vec<F>,
-    table: Vec<F>,
-    indexes: Vec<F>,
+    pub values: Vec<F>,
+    pub accesses: Vec<F>,
+    pub table: Vec<F>,
+    pub indexes: Vec<F>,
 }
 
 pub struct SubsetLookupInput<F: TPrimeField> {
-    values: Vec<F>,
-    accesses: Vec<F>,
-    table: Vec<F>,
+    pub values: Vec<F>,
+    pub accesses: Vec<F>,
+    pub table: Vec<F>,
 }
 
 pub enum LookupInput<F: TPrimeField> {

@@ -1,11 +1,13 @@
+use std::iter::once;
 use std::marker::PhantomData;
 use std::ops::Index;
 use ark_ff::PrimeField;
+use ark_std::iterable::Iterable;
 use itertools::Itertools;
 use crate::common::algfn::{AlgFn, AlgFnSO};
 use crate::common::claims::{EvalClaim, SinglePointClaims, SumClaim};
 use crate::common::wrapper::TPrimeField;
-use crate::components::lookups::logup::logup::{IndexedLookupClaim, Logup, LookupClaim, LookupType};
+use crate::components::lookups::logup::logup::{IndexedLookupClaim, IndexedLookupInput, Logup, LookupClaim, LookupInput, LookupType};
 use crate::components::sumcheck::dense::DenseSumcheck;
 use crate::components::sumcheck::dense_eq::eq_eval;
 use crate::components::sumcheck::generic::SumcheckProtocol;
@@ -55,6 +57,7 @@ impl<T: Clone, It: Iterator<Item=T>> Pad<T> for It {
 pub struct Vspark<F: TPrimeField> {
     d: usize,  // matrix number logsize
     h: usize,  // description logsize
+    n: usize,  // somehow needed for tau, must be sum of some other values here
     px: usize,
     py: usize,
     x_logsize: usize,
@@ -63,8 +66,36 @@ pub struct Vspark<F: TPrimeField> {
 }
 
 impl<F: TPrimeField> Vspark<F> {
-    fn check_tau(&self, claim: EvalClaim<F>, point: &[F]) {
-        todo!()
+    fn compute_tau(n: usize, p: usize, x: &[F], r: &[F]) -> F {
+        let r_off = (0..p).scan(r[0],  |acc, _| {
+            *acc = *acc * r[0];
+            Some(*acc)
+        }).chain(r.iter().skip(1).cloned()).collect_vec();
+
+        assert!(r_off.len() == x.len());
+
+        let first = x[0] *
+            (0..p).map(|j| {
+                x[j] + (F::one() - x[j]) * r_off[j]
+            }).fold(F::one(), |acc, val| {acc * val}) *
+            (p..n).map(|j| {
+                x[j + 1] * r_off[j] + (F::one() - x[j + 1]) * (F::one() - r_off[j])
+            }).fold(F::one(), |acc, val| {acc * val});
+
+        let other = (0..n).map(|k| {
+            (0..k).map(|j| {
+                F::one() - x[j]
+            }).chain(
+                once(x[k])
+            ).chain(
+                ((k + 1)..(k + p + 2)).map(|j| {
+                    F::one() - x[j]
+                })
+            ).fold(F::one(), |acc, val| {acc * val}) *
+                eq_eval(&x[(k + p + 2)..(n + 1)], &r_off[(k + p + 2)..n])
+        }).fold(F::zero(), |acc, val| {acc + val});
+
+        first + other
     }
 }
 
@@ -73,12 +104,7 @@ impl<F: TPrimeField> Vspark<F> {
 type VsparkClaimsBefore<F: TPrimeField> = EvalClaim<F>;  // claim of M[t](r_x, r_y) at point (t | r_x | r_y)
 
 pub struct VsparkClaimsAfter<F: TPrimeField> {
-    e_claim_old: EvalClaim<F>,
-    e_claim_new: EvalClaim<F>,
-    c_claim: EvalClaim<F>,
-    i_claim: EvalClaim<F>,
-    x_claim: EvalClaim<F>,
-    y_claim: EvalClaim<F>,
+    _pd: PhantomData<F>,
 }
 
 pub struct VsparkProverInput<F: TPrimeField> {
@@ -87,6 +113,8 @@ pub struct VsparkProverInput<F: TPrimeField> {
     i_poly: Vec<F>,
     x_poly: Vec<F>,
     y_poly: Vec<F>,
+    x_tau_table: Vec<F>,
+    y_tau_table: Vec<F>,
     _pd: PhantomData<F>
 }
 
@@ -141,8 +169,8 @@ impl<F: TPrimeField, Dialect: TArithmeticDialect<F>> TProtocol<Dialect> for Vspa
         let IndexedLookupClaim{ accesses: y_acc, table: tau_y_claim, values: y_pull, indexes: y_claim } = b;
         let IndexedLookupClaim{ accesses: i_acc, table: e_claim_lookup, values: i_pull, indexes: i_claim } = c;
 
-        self.check_tau(tau_x_claim, r_x);
-        self.check_tau(tau_y_claim, r_y);
+        assert!(tau_x_claim.ev == Self::compute_tau(self.n, self.px, &tau_x_claim.point, r_x));
+        assert!(tau_y_claim.ev == Self::compute_tau(self.n, self.py, &tau_y_claim.point, r_y));
 
         let gamma = (0..self.d).map(|_| ctx.challenge()).collect_vec();
 
@@ -160,7 +188,7 @@ impl<F: TPrimeField, Dialect: TArithmeticDialect<F>> TProtocol<Dialect> for Vspa
 
         let [c_ev_sumcheck, i_pull_ev_sumcheck, x_pull_ev_sumcheck, y_pull_ev_sumcheck] = e_claim_sumcheck.evs.try_into().unwrap();
         let reducer = MultiDenseEqSumcheck::new(self.h + self.d);
-        let claims_mess_1 = reducer.verify(ctx, MultiPointEvalClaim::new(
+        let mut claims_mess_1 = reducer.verify(ctx, MultiPointEvalClaim::new(
             vec![
                 sumcheck_point,
                 x_claim.point,
@@ -181,24 +209,32 @@ impl<F: TPrimeField, Dialect: TArithmeticDialect<F>> TProtocol<Dialect> for Vspa
             ],
         ));
 
+        assert!(claims_mess_1.evs[1] == claims_mess_1.evs[2]);
+        assert!(claims_mess_1.evs[4] == claims_mess_1.evs[5]);
+        assert!(claims_mess_1.evs[7] == claims_mess_1.evs[8]);
+
+
 
         let reducer2 = MultiDenseEqSumcheck::new(self.d);
 
-        let claims_mess_2 = reducer2.verify(ctx, MultiPointEvalClaim::new(
+        let mut claims_mess_2 = reducer2.verify(ctx, MultiPointEvalClaim::new(
             vec![
                 e_claim_lookup.point,
-                e_point_old,
+                t.to_vec(),
                 gamma,
                 i_acc.point,
             ],
             vec![
+                MultiPointEvalClaimPart::new(1, 3, i_acc.ev),
                 MultiPointEvalClaimPart::new(0, 0, e_claim_lookup.ev),
                 MultiPointEvalClaimPart::new(0, 1, e_ev_old),
                 MultiPointEvalClaimPart::new(0, 2, e_in_gamma_eval),
-                MultiPointEvalClaimPart::new(1, 3, i_acc.ev),
             ],
         ));
-        
+
+        assert!(claims_mess_2.evs[1] == claims_mess_2.evs[2]);
+        assert!(claims_mess_2.evs[1] == claims_mess_2.evs[3]);
+
         // All these claims should be returned.
         // This is a mess. there are actually like 12 of them.
         // Why would we invent a protocol like this?
@@ -210,12 +246,14 @@ impl<F: TPrimeField, Dialect: TArithmeticDialect<F>> TProtocol<Dialect> for Vspa
     }
 }
 
+
 impl<F: TPrimeField, Dialect: TArithmeticDialect<F>> TProverImpl<Dialect> for Vspark<F> {
     type Verifier = Self;
     type ProverInput = VsparkProverInput<F>;
     type ProverOutput = VsparkProverOutput<F>;
 
     fn _prove(protocol: &Self::Verifier, ctx: &mut Dialect, claims: <Self::Verifier as TProtocol<Dialect>>::ClaimsBefore, advice: Self::ProverInput) -> (<Self::Verifier as TProtocol<Dialect>>::ClaimsAfter, Self::ProverOutput) {
+
         todo!()
     }
 }
@@ -223,7 +261,9 @@ impl<F: TPrimeField, Dialect: TArithmeticDialect<F>> TProverImpl<Dialect> for Vs
 #[cfg(test)]
 mod tests {
     use itertools::Itertools;
-    use crate::components::vspark::vspark::Pad;
+    use crate::components::vspark::vspark::{Pad, Vspark};
+    use ark_bn254::Fq as F;
+    use num_traits::One;
 
     #[test]
     fn test_pad_iterator() {
@@ -231,5 +271,21 @@ mod tests {
             (0..3).collect_vec().into_iter().pad(4, 10).collect_vec(),
             vec![0, 1, 2, 4, 4, 4, 4, 4, 4, 4],
         )
+    }
+
+    #[test]
+    fn test_single_tau_computation() {
+        Vspark::<F>::compute_tau(5, 2, &vec![
+            F::from(1),
+            F::from(2),
+            F::from(3),
+            F::from(4),
+            F::from(5),
+            F::from(6),
+        ], &vec![
+            F::from(7),
+            F::from(8),
+            F::from(9),
+        ]);
     }
 }

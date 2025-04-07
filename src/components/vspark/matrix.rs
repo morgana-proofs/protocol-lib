@@ -9,11 +9,11 @@ use crate::common::wrapper::TPrimeField;
 
 #[derive(Debug, Default, Copy, Clone)]
 pub struct AdmSubset {
-    p: usize,
-    a: usize,
-    k: usize,
-    u: usize,
-    l: usize
+    p: usize,  // page logsize
+    a: usize,  // page offset
+    k: usize,  // log(number of full pages)
+    u: usize,  // in-page offset
+    l: usize,  // length
 }
 
 #[derive(Debug, Default, Copy, Clone)]
@@ -95,10 +95,10 @@ impl AdmSubset {
         Ok(bounds.1 - bounds.0)
     }
 
-    fn encode(&self, p: usize) -> usize {
-        let Self{a, u, k, ..} = self; // l is not needed
+    fn encode(&self) -> usize {
+        let Self{p, a, u, k, l } = self; // l is not needed
 
-        (2 * ((1 << p) * a + u) + 1) * (1usize << k)
+        (2 * ((1usize << p) * a + u) + 1) * (1usize << k)
     }
 
     pub fn decode(p: usize, mut code: usize) -> Option<Self> {
@@ -120,8 +120,35 @@ impl AdmSubset {
     }
 }
 
-pub fn build_tau_table(p: usize, total_logisze: usize) {
 
+pub fn compute_tau<F: TPrimeField>(n: usize, s: AdmSubset, r: &[F]) -> F {
+    // eldest n - k - p bits: eq a, r
+    let mut ret = (0..n - s.k - s.p).scan(1usize, |acc, _| {
+        let r = *acc & s.a == 0;
+        *acc <<= 1;
+        Some(F::from(r as u64))
+    }).zip(&r[r.len() + s.p + s.k - n..]).fold(F::zero(), |acc, (x, &y)| {
+        acc + (F::one() - x - y + (x * y).double())
+    });
+    if s.u != 0 {
+        let powers = (0..(usize::BITS - s.u.leading_zeros())).scan(r[0],  |acc, _| {
+            let ret = *acc;
+            *acc = *acc * *acc;
+            Some(ret)
+        }).collect_vec();
+
+        let mul = (0..(usize::BITS - s.u.leading_zeros())).filter_map(|i| {
+            if s.u & (1 << i) != 0 {
+                Some(powers[i as usize])
+            } else {
+                None
+            }
+        }).fold(F::zero(), |acc, elt| {
+            acc + elt
+        });
+        ret = ret * mul;
+    }
+    ret
 }
 
 impl Display for AdmSubset{
@@ -436,9 +463,18 @@ mod tests {
         let p = 3;
         for i in 0usize..100 {
             AdmSubset::decode(p, i).map(|x| {
-                let res = x.encode(p);
+                let res = x.encode();
                 assert_eq!(i, res, "{}, {}, {}", i, x, res);
             });
         }
+    }
+
+    #[test]
+    fn test_tau() {
+        compute_tau(5, AdmSubset::decode(3, 5).unwrap(), &vec![
+            F::from(1),
+            F::from(2),
+            F::from(3),
+        ]);
     }
 }
