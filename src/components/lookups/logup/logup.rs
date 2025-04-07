@@ -5,24 +5,24 @@ use itertools::Itertools;
 use crate::common::algfn::AlgFn;
 use crate::common::claims::{EvalClaim, SinglePointClaims, SumClaim};
 use crate::common::math::{evaluate_index_poly, evaluate_multivar};
-use crate::common::wrapper::{PolyOps, TPrimeField};
+use crate::common::wrapper::{ComputationalField, TFelt};
 use crate::components::splits::split::{SplitAt, SplitIdx};
 use crate::components::sumcheck::dense_eq::DenseEqSumcheck;
-use crate::dialects::dialect::TArithmeticDialect;
+use crate::transcript::transcript::TArithmeticTranscript;
 use crate::protocol::component::{TProtocol, TProverImpl};
 
 #[derive(Debug, Clone, Copy)]
-pub struct LogupLayerFn<F: TPrimeField> {
+pub struct LogupLayerFn<F: TFelt> {
     _marker: PhantomData<F>,
 }
 
-impl<F: TPrimeField> LogupLayerFn<F> {
+impl<F: TFelt> LogupLayerFn<F> {
     pub fn new() -> Self {
         Self { _marker: PhantomData }
     }
 }
 
-impl<F: TPrimeField> AlgFn<F> for LogupLayerFn<F>{
+impl<F: TFelt> AlgFn<F> for LogupLayerFn<F>{
     fn exec(&self, args: &impl std::ops::Index<usize, Output = F>) -> impl Iterator<Item = F> {
         [
             args[0] * args[3] + args[1] * args[2], // ad + bc
@@ -43,14 +43,14 @@ impl<F: TPrimeField> AlgFn<F> for LogupLayerFn<F>{
     }
 }
 
-pub struct LogupMainphase<F: TPrimeField> {
+pub struct LogupMainphase<F: TFelt> {
     pub logsizes: Vec<usize>,
     pub do_initial_split: bool,
     pub input_permutation: Vec<usize>,
     _pd: PhantomData<F>
 }
 
-impl<F: TPrimeField> LogupMainphase<F> {
+impl<F: TFelt> LogupMainphase<F> {
 
     /// Assumes that first two logsizes have the same length - i.e. they corresponding polynomial is already split.
     pub fn new(logsizes: Vec<usize>) -> Self {
@@ -135,7 +135,7 @@ impl<F: TPrimeField> LogupMainphase<F> {
     }
 }
 
-impl<F: TPrimeField, Dialect: TArithmeticDialect<F>> TProtocol<Dialect> for LogupMainphase<F> {
+impl<F: TFelt, Dialect: TArithmeticTranscript<F>> TProtocol<Dialect> for LogupMainphase<F> {
     type ClaimsBefore = SumClaim<F>;
     type ClaimsAfter = Vec<SinglePointClaims<F>>;
 
@@ -150,8 +150,8 @@ impl<F: TPrimeField, Dialect: TArithmeticDialect<F>> TProtocol<Dialect> for Logu
             ctx.read(),
             ctx.read(),
         ];
-        assert!(denom != F::zero());
-        assert!(num == denom * claims);
+
+        (claims - num / denom).require();
 
 
 
@@ -211,12 +211,12 @@ impl<F: TPrimeField, Dialect: TArithmeticDialect<F>> TProtocol<Dialect> for Logu
     }
 }
 
-impl<F: TPrimeField, Dialect: TArithmeticDialect<F>> TProverImpl<Dialect> for LogupMainphase<F> {
+impl<F: ComputationalField, Transcript: TArithmeticTranscript<F>> TProverImpl<Transcript> for LogupMainphase<F> {
     type Verifier = Self;
     type ProverInput = Vec<[Vec<F>; 2]>;
     type ProverOutput = ();
 
-    fn _prove(protocol: &Self::Verifier, ctx: &mut Dialect, claims: <Self::Verifier as TProtocol<Dialect>>::ClaimsBefore, advice: Self::ProverInput) -> (<Self::Verifier as TProtocol<Dialect>>::ClaimsAfter, Self::ProverOutput) {
+    fn _prove(protocol: &Self::Verifier, ctx: &mut Transcript, claims: <Self::Verifier as TProtocol<Transcript>>::ClaimsBefore, advice: Self::ProverInput) -> (<Self::Verifier as TProtocol<Transcript>>::ClaimsAfter, Self::ProverOutput) {
         let f = LogupLayerFn::<F>::new();
 
         let (mut witness, [num, denom]) = protocol.make_witness(advice);
@@ -290,31 +290,31 @@ impl<F: TPrimeField, Dialect: TArithmeticDialect<F>> TProverImpl<Dialect> for Lo
         (accumulated_claims, ())    }
 }
 
-pub struct IndexedLookupInput<F: TPrimeField> {
+pub struct IndexedLookupInput<F: TFelt> {
     pub values: Vec<F>,
     pub accesses: Vec<F>,
     pub table: Vec<F>,
     pub indexes: Vec<F>,
 }
 
-pub struct SubsetLookupInput<F: TPrimeField> {
+pub struct SubsetLookupInput<F: TFelt> {
     pub values: Vec<F>,
     pub accesses: Vec<F>,
     pub table: Vec<F>,
 }
 
-pub enum LookupInput<F: TPrimeField> {
+pub enum LookupInput<F: TFelt> {
     Indexed(IndexedLookupInput<F>),
     Subset(SubsetLookupInput<F>),
 }
 
-impl <F: TPrimeField> LookupInput<F> {
+impl <F: TFelt> LookupInput<F> {
     pub fn indexed_by_usize(table: Vec<F>, accesses: Vec<F>, values: Vec<F>, indexes: Vec<usize>) -> Self {
         LookupInput::Indexed(IndexedLookupInput{
             values,
             accesses,
             table,
-            indexes: indexes.into_iter().map(|x| F::from(x as u64)).collect_vec(),
+            indexes: indexes.into_iter().map(|x| F::from_const(x as u64)).collect_vec(),
         })
     }
     pub fn indexed(table: Vec<F>, accesses: Vec<F>, values: Vec<F>, indexes: Vec<F>) -> Self {
@@ -335,7 +335,7 @@ impl <F: TPrimeField> LookupInput<F> {
 }
 
 #[derive(Eq, PartialEq, Clone, Debug)]
-pub struct IndexedLookupClaim<F: TPrimeField> {
+pub struct IndexedLookupClaim<F: TFelt> {
     pub accesses: EvalClaim<F>,
     pub table: EvalClaim<F>,
     pub values: EvalClaim<F>,
@@ -343,14 +343,14 @@ pub struct IndexedLookupClaim<F: TPrimeField> {
 }
 
 #[derive(Eq, PartialEq, Clone, Debug)]
-pub struct SubsetLookupClaim<F: TPrimeField> {
+pub struct SubsetLookupClaim<F: TFelt> {
     accesses: EvalClaim<F>,
     table: EvalClaim<F>,
     values: EvalClaim<F>,
 }
 
 #[derive(Eq, PartialEq, Clone, Debug)]
-pub enum LookupClaim<F: TPrimeField> {
+pub enum LookupClaim<F: TFelt> {
     Indexed(IndexedLookupClaim<F>),
     Subset(SubsetLookupClaim<F>),
 }
@@ -360,12 +360,12 @@ pub enum LookupType {
     Subset(usize, usize),
 }
 
-pub struct Logup<F: TPrimeField> {
+pub struct Logup<F: TFelt> {
     lookups: Vec<LookupType>,
     _pd: PhantomData<F>,
 }
 
-impl<F: TPrimeField> Logup<F> {
+impl<F: TFelt> Logup<F> {
     pub fn new(lookups: Vec<LookupType>) -> Self {
         Self {
             lookups,
@@ -374,26 +374,26 @@ impl<F: TPrimeField> Logup<F> {
     }
 }
 
-impl<F: TPrimeField, Dialect: TArithmeticDialect<F>> TProtocol<Dialect> for Logup<F> {
+impl<F: TFelt, Dialect: TArithmeticTranscript<F>> TProtocol<Dialect> for Logup<F> {
     type ClaimsBefore = ();
     type ClaimsAfter = Vec<LookupClaim<F>>;
 
-    fn verify(&self, ctx: &mut Dialect, claims: Self::ClaimsBefore) -> Self::ClaimsAfter {
+    fn verify(&self, ctx: &mut Dialect, _claims: Self::ClaimsBefore) -> Self::ClaimsAfter {
         let max_table_size = self.lookups.iter().filter_map(|x| match x {
             LookupType::Indexed(table, _) => Some(1 << table),
             _ => None,
         }).max();
         let c = self.lookups.iter().map(|_| ctx.challenge()).collect_vec();
 
-        let mut gammas = None;
+        let gammas;
         if let Some(max_table_size) = max_table_size {
             let gamma = ctx.challenge();
             let mut running_gamma = F::zero();
-            gammas = Some((0..max_table_size).map(|_| {
+            gammas = (0..max_table_size).map(|_| {
                 let res = running_gamma;
                 running_gamma = res + gamma.clone();
                 res
-            }).collect_vec());
+            }).collect_vec();
         }
 
         let mainphase = LogupMainphase::new(self.lookups.iter().map(|lt| match lt {
@@ -452,12 +452,12 @@ impl<F: TPrimeField, Dialect: TArithmeticDialect<F>> TProtocol<Dialect> for Logu
     }
 }
 
-impl<F: TPrimeField, Dialect: TArithmeticDialect<F>> TProverImpl<Dialect> for Logup<F> {
+impl<F: ComputationalField, Transcript: TArithmeticTranscript<F>> TProverImpl<Transcript> for Logup<F> {
     type Verifier = Self;
     type ProverInput = Vec<LookupInput<F>>;
     type ProverOutput = ();
 
-    fn _prove(protocol: &Self::Verifier, ctx: &mut Dialect, claims: <Self::Verifier as TProtocol<Dialect>>::ClaimsBefore, advice: Self::ProverInput) -> (<Self::Verifier as TProtocol<Dialect>>::ClaimsAfter, Self::ProverOutput) {
+    fn _prove(protocol: &Self::Verifier, ctx: &mut Transcript, claims: <Self::Verifier as TProtocol<Transcript>>::ClaimsBefore, advice: Self::ProverInput) -> (<Self::Verifier as TProtocol<Transcript>>::ClaimsAfter, Self::ProverOutput) {
         let max_table_size = advice.iter().filter_map(|x| match x {
             LookupInput::Indexed(IndexedLookupInput{ table, .. }) => Some(table.len()),
             _ => None,
@@ -478,7 +478,7 @@ impl<F: TPrimeField, Dialect: TArithmeticDialect<F>> TProverImpl<Dialect> for Lo
                         [
                             accesses.clone(),
                             table.iter().enumerate().map(|(i, t)| {
-                                *t + *gamma * F::from(i as u64) + c[lookup_idx]
+                                *t + *gamma * F::from_const(i as u64) + c[lookup_idx]
                             }).collect_vec()
                         ],
                         [
@@ -567,14 +567,14 @@ impl<F: TPrimeField, Dialect: TArithmeticDialect<F>> TProverImpl<Dialect> for Lo
 
 #[cfg(test)]
 mod tests {
-    use crate::dialects::dialect::{TDialectInterface, TTranscriptSupports};
+    use crate::transcript::transcript::{TTranscriptInterface, TTranscriptSupports};
     use super::*;
     use ark_bn254::Fq as F;
     use ark_std::rand::RngCore;
     use ark_std::UniformRand;
     use num_traits::{One, Zero};
     use crate::common::wrapper::Invert;
-    use crate::dialects::dialect::tests::ManualTestDialect;
+    use crate::transcript::transcript::tests::ManualTestTranscript;
 
     #[test]
     fn test_logup_mainphase() {
@@ -598,9 +598,9 @@ mod tests {
 
         assert!(denom != F::zero());
 
-        let sum_claim = SumClaim(num * denom.invert().unwrap());
+        let sum_claim = SumClaim(num / denom);
 
-        let mut ctx = ManualTestDialect::new((0..1000).map(|_| F::rand(rng)).collect_vec());
+        let mut ctx = ManualTestTranscript::new((0..1000).map(|_| F::rand(rng)).collect_vec());
 
         let (pclaims, _) = logup.prove::<LogupMainphase<_>>(&mut ctx, sum_claim.clone(), data);
         ctx.end();
@@ -659,7 +659,7 @@ mod tests {
 
         let proto = Logup::new(lookups);
 
-        let mut ctx = ManualTestDialect::new((0..1000).map(|_| F::rand(rng)).collect_vec());
+        let mut ctx = ManualTestTranscript::new((0..1000).map(|_| F::rand(rng)).collect_vec());
         let (pclaims, _) = proto.prove::<Logup<_,>>(&mut ctx, (), data);
         ctx.end();
         let vclaims = proto.verify(&mut ctx, ());

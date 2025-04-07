@@ -1,10 +1,12 @@
-use crate::common::wrapper::{PolyOps, TPrimeField};
+// use crate::common::wrapper::{TFelt, TPrimeField};
 
-use super::board::{Sig, TSupportsFormalArithOps, TSupportsFormalType, TSupportsFormalVTranscript};
+// use super::board::{Sig, TSupportsFormalArithOps, TSupportsFormalType, TSupportsFormalVTranscript};
 
-/// Entry point trait that passes through all interesting operations (so they can be conveniently called without fully qualified syntax).
-/// Due to "where" semantics, methods are unavailable unless an actual implementor trait is present.
-pub trait TDialectInterface {
+use crate::common::wrapper::TFelt;
+
+// /// Entry point trait that passes through all interesting operations (so they can be conveniently called without fully qualified syntax).
+// /// Due to "where" semantics, methods are unavailable unless an actual implementor trait is present.
+pub trait TTranscriptInterface {
     /// squeezes new challenge
     fn challenge<F>(&mut self) -> F where Self: TTranscriptSupports<F> {
         self._challenge()
@@ -32,11 +34,11 @@ pub trait TDialectInterface {
 }
 
 
-/// Trait for general interactions with transcript. Operations from it are passed to TDialectInterface, because otherwise
-/// we would need fully qualified syntax to run them.
-/// Methods in this trait are generally fallible - prover is unable to use read methods, verifier is unable to use write
-/// methods, and some challenges can be unsupported. This is completely OK and much better than having separate traits for
-/// each of these concepts. 
+// /// Trait for general interactions with transcript. Operations from it are passed to TDialectInterface, because otherwise
+// /// we would need fully qualified syntax to run them.
+// /// Methods in this trait are generally fallible - prover is unable to use read methods, verifier is unable to use write
+// /// methods, and some challenges can be unsupported. This is completely OK and much better than having separate traits for
+// /// each of these concepts. 
 pub trait TTranscriptSupports<T> {
     /// squeezes new challenge
     fn _challenge(&mut self) -> T;
@@ -50,26 +52,26 @@ pub trait TTranscriptSupports<T> {
     fn _unconstrained_write(&mut self, value: &T); 
 }
 
-/// A verifier that is capable of field element manipulation
-pub trait TFormalArithmeticDialect<F: TPrimeField>: TDialectInterface + TSupportsFormalType<F> + TSupportsFormalArithOps<F> + TSupportsFormalVTranscript<F> + TTranscriptSupports<Sig<F, Self>>{}
+// /// A verifier that is capable of field element manipulation
+// pub trait TFormalArithmeticDialect<F: TPrimeField>: TDialectInterface + TSupportsFormalType<F> + TSupportsFormalArithOps<F> + TSupportsFormalVTranscript<F> + TTranscriptSupports<Sig<F, Self>>{}
 
-pub trait TArithmeticDialect<F: PolyOps> : TDialectInterface + TTranscriptSupports<F> {}
+pub trait TArithmeticTranscript<F: TFelt> : TTranscriptInterface + TTranscriptSupports<F> {}
 
-impl<F: TPrimeField, Dialect: TFormalArithmeticDialect<F>> TArithmeticDialect<Sig<F, Dialect>> for Dialect {}
+// impl<F: TPrimeField, Dialect: TFormalArithmeticDialect<F>> TArithmeticDialect<Sig<F, Dialect>> for Dialect {}
 
 
 #[cfg(test)]
 pub mod tests {
     use super::*;
 
-    pub struct ManualTestDialect<F: PolyOps> {
+    pub struct ManualTestTranscript<F: TFelt> {
         challenges: Vec<F>,
         c_idx: usize,
         data: Vec<F>,
         d_idx: usize,
     }
     
-    impl<F: PolyOps> ManualTestDialect<F> {
+    impl<F: TFelt> ManualTestTranscript<F> {
         pub fn new(challenges: Vec<F>) -> Self {
             Self {
                 challenges,
@@ -83,8 +85,8 @@ pub mod tests {
         }
     }
     
-    impl<F: PolyOps> TDialectInterface for ManualTestDialect<F> {}
-    impl<F: PolyOps> TTranscriptSupports<F> for ManualTestDialect<F> {
+    impl<F: TFelt> TTranscriptInterface for ManualTestTranscript<F> {}
+    impl<F: TFelt> TTranscriptSupports<F> for ManualTestTranscript<F> {
         fn _challenge(&mut self) -> F {
             self.c_idx += 1;
             self.challenges[self.c_idx - 1].clone()
@@ -109,5 +111,5 @@ pub mod tests {
         }
     }
 
-    impl<F: PolyOps> TArithmeticDialect<F> for ManualTestDialect<F> {}
+    impl<F: TFelt> TArithmeticTranscript<F> for ManualTestTranscript<F> {}
 }

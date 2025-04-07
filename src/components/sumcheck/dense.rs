@@ -1,47 +1,47 @@
 use std::marker::PhantomData;
 use itertools::Itertools;
-use crate::common::algfn::{AlgFn, AlgFnSO};
+use crate::common::algfn::AlgFnSO;
 use crate::common::claims::{EvalClaim, SinglePointClaims, SumClaim};
-use crate::common::wrapper::TPrimeField;
+use crate::common::wrapper::{ComputationalField, TFelt};
 use crate::components::sumcheck::dense_eq::DenseSumcheckableSO;
 use crate::components::sumcheck::generic::{SumcheckGenericProverImpl, SumcheckProtocol};
-use crate::dialects::dialect::TArithmeticDialect;
+use crate::transcript::transcript::TArithmeticTranscript;
 use crate::protocol::component::{TProtocol, TProverImpl};
 
-pub struct DenseSumcheck<F: TPrimeField, Fun: AlgFnSO<F>> {
+pub struct DenseSumcheck<F: TFelt, Fun: AlgFnSO<F>> {
     f: Fun,
     pub num_vars: usize,
     _pd: PhantomData<F>,
 }
 
-impl<F: TPrimeField, Fun: AlgFnSO<F>> DenseSumcheck<F, Fun> {
+impl<F: TFelt, Fun: AlgFnSO<F>> DenseSumcheck<F, Fun> {
     pub fn new(f: Fun, num_vars: usize) -> Self {
         Self {f, num_vars, _pd: PhantomData}
     }
 }
 
-impl<F: TPrimeField, Fun: AlgFnSO<F>, Dialect: TArithmeticDialect<F>> TProtocol<Dialect> for DenseSumcheck<F, Fun> {
+impl<F: TFelt, Fun: AlgFnSO<F>, Transcript: TArithmeticTranscript<F>> TProtocol<Transcript> for DenseSumcheck<F, Fun> {
     type ClaimsBefore = SumClaim<F>;
     type ClaimsAfter = SinglePointClaims<F>;
 
-    fn verify(&self, ctx: &mut Dialect, claims: Self::ClaimsBefore) -> Self::ClaimsAfter {
+    fn verify(&self, ctx: &mut Transcript, claims: Self::ClaimsBefore) -> Self::ClaimsAfter {
         let generic_protocol_config = SumcheckProtocol::<F, _>::new(self.f.clone(), self.num_vars);
 
         let EvalClaim {ev, point} = generic_protocol_config.verify(ctx, claims);
 
         let poly_evs = (0..self.f.n_ins()).map(|_| ctx.read()).collect_vec();
 
-        assert_eq!(self.f.exec(&poly_evs), ev, "Final combinator check has failed.");
+        (self.f.exec(&poly_evs) - ev).require();
         SinglePointClaims {point, evs: poly_evs}
     }
 }
 
-impl<F: TPrimeField, Fun: AlgFnSO<F>, Dialect: TArithmeticDialect<F>> TProverImpl<Dialect> for DenseSumcheck<F, Fun> {
+impl<F: ComputationalField, Fun: AlgFnSO<F>, Transcript: TArithmeticTranscript<F>> TProverImpl<Transcript> for DenseSumcheck<F, Fun> {
     type Verifier = Self;
     type ProverInput = Vec<Vec<F>>;
     type ProverOutput = ();
 
-    fn _prove(protocol: &Self::Verifier, ctx: &mut Dialect, claims: <Self::Verifier as TProtocol<Dialect>>::ClaimsBefore, advice: Self::ProverInput) -> (<Self::Verifier as TProtocol<Dialect>>::ClaimsAfter, Self::ProverOutput) {
+    fn _prove(protocol: &Self::Verifier, ctx: &mut Transcript, claims: <Self::Verifier as TProtocol<Transcript>>::ClaimsBefore, advice: Self::ProverInput) -> (<Self::Verifier as TProtocol<Transcript>>::ClaimsAfter, Self::ProverOutput) {
         let generic_protocol_config = SumcheckProtocol::new(protocol.f.clone(), protocol.num_vars);
 
         let so = DenseSumcheckableSO::new(advice, protocol.f.clone(),  protocol.num_vars, claims.0.clone());
@@ -59,13 +59,11 @@ impl<F: TPrimeField, Fun: AlgFnSO<F>, Dialect: TArithmeticDialect<F>> TProverImp
 mod tests {
     use std::ops::Index;
     use super::*;
-    use crate::dialects::dialect::tests::ManualTestDialect;
+    use crate::{common::wrapper::TFeltUtil, transcript::transcript::tests::ManualTestTranscript};
     use ark_bn254::Fq as F;
-    use ark_ff::Field;
     use ark_std::{test_rng, UniformRand};
-    use num_traits::{One, Zero};
+    //use num_traits::One;
     use crate::common::math::evaluate_multivar;
-    use crate::components::sumcheck::dense_eq::DenseEqSumcheck;
 
     #[derive(Clone, Copy)]
     pub struct TestFunction {}
@@ -100,7 +98,7 @@ mod tests {
             output.push(f.exec(&args));
         }
 
-        let mut transcript_p = ManualTestDialect::new((0..1000).map(|_| F::rand(rng)).collect_vec());
+        let mut transcript_p = ManualTestTranscript::new((0..1000).map(|_| F::rand(rng)).collect_vec());
 
         let ev_claims = SumClaim(output.iter().sum());
 

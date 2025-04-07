@@ -1,7 +1,7 @@
-use crate::common::wrapper::TPrimeField;
+use crate::common::wrapper::TFelt;
 
 /// Represents prover view of multivariate polynomial that is being sumchecked.
-pub trait Sumcheckable<F: TPrimeField> {
+pub trait Sumcheckable<F: TFelt> {
     /// Binds the polynomial on the coordinate t. Might be fallible unless unipoly() method was called.
     fn bind(&mut self, t: F);
     /// Returns the sum along all coordinates but the 0-th one.
@@ -12,7 +12,7 @@ pub trait Sumcheckable<F: TPrimeField> {
     fn challenges(&self) -> &[F];
 }
 
-pub trait FoldToSumcheckable<F: TPrimeField> {
+pub trait FoldToSumcheckable<F: TFelt> {
     type Target : Sumcheckable<F>;
 
     fn rlc(self, gamma: F) -> Self::Target;

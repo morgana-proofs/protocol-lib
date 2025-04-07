@@ -1,10 +1,7 @@
 use std::fmt::{Display, Formatter};
-use anyhow::{ensure, Error};
-use ark_std::iterable::Iterable;
 use ark_std::log2;
 use itertools::Itertools;
-use rand::Rng;
-use crate::common::wrapper::TPrimeField;
+use crate::common::wrapper::TFelt;
 
 
 #[derive(Debug, Default, Copy, Clone)]
@@ -121,12 +118,12 @@ impl AdmSubset {
 }
 
 
-pub fn compute_tau<F: TPrimeField>(n: usize, s: AdmSubset, r: &[F]) -> F {
+pub fn compute_tau<F: TFelt>(n: usize, s: AdmSubset, r: &[F]) -> F {
     // eldest n - k - p bits: eq a, r
     let mut ret = (0..n - s.k - s.p).scan(1usize, |acc, _| {
         let r = *acc & s.a == 0;
         *acc <<= 1;
-        Some(F::from(r as u64))
+        Some(F::from_const(r as u64))
     }).zip(&r[r.len() + s.p + s.k - n..]).fold(F::zero(), |acc, (x, &y)| {
         acc + (F::one() - x - y + (x * y).double())
     });
@@ -184,21 +181,21 @@ pub fn belongs(subset: &AdmSubset, set: AdmLen) -> bool {
 }
 
 #[derive(Debug, Default)]
-pub struct VsparkRecDescr<F: TPrimeField> {
+pub struct VsparkRecDescr<F: TFelt> {
     id: usize,
     coeff: F,
     x: AdmSubset,
     y: AdmSubset,
 }
 
-impl<F: TPrimeField> VsparkRecDescr<F> {
+impl<F: TFelt> VsparkRecDescr<F> {
     pub fn new(id: usize, coeff: F, x: AdmSubset, y: AdmSubset) -> Self {
         Self {id, coeff, x, y}
     }
 }
 
 #[derive(Debug, Default)]
-pub struct VsparkMatrix<F: TPrimeField> {
+pub struct VsparkMatrix<F: TFelt> {
     px: usize,
     x: AdmLen,
     py: usize,
@@ -206,7 +203,7 @@ pub struct VsparkMatrix<F: TPrimeField> {
     submatrices: Vec<VsparkRecDescr<F>>,
 }
 
-impl <F: TPrimeField> VsparkMatrix<F> {
+impl <F: TFelt> VsparkMatrix<F> {
     pub fn new(px: usize, x: AdmLen, py: usize, y: AdmLen, submatrices: Vec<VsparkRecDescr<F>>) -> Self {
         assert!(px == x.p && py == y.p);
         Self { px, py, x, y, submatrices }
@@ -214,11 +211,11 @@ impl <F: TPrimeField> VsparkMatrix<F> {
 }
 
 #[derive(Debug, Default)]
-pub struct VsparkMatrixGroup<F: TPrimeField> {
+pub struct VsparkMatrixGroup<F: TFelt> {
     m: Vec<VsparkMatrix<F>>,
 }
 
-impl <F: TPrimeField> VsparkMatrixGroup<F> {
+impl <F: TFelt> VsparkMatrixGroup<F> {
     pub fn new(m: Vec<VsparkMatrix<F>>) -> Self {
         Self { m }
     }

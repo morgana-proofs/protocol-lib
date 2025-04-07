@@ -1,8 +1,8 @@
 use std::marker::PhantomData;
 use itertools::Itertools;
 use crate::common::claims::SinglePointClaims;
-use crate::common::wrapper::PolyOps;
-use crate::dialects::dialect::TArithmeticDialect;
+use crate::common::wrapper::TFelt;
+use crate::transcript::transcript::TArithmeticTranscript;
 use crate::protocol::component::{TProtocol, TProverImpl};
 
 #[derive(Debug, Copy, Clone)]
@@ -45,7 +45,7 @@ impl SplitIdx {
     }
 }
 
-pub struct SplitAt<F: PolyOps> {
+pub struct SplitAt<F: TFelt> {
     pub bundle_size: usize,
     pub var_idx: SplitIdx,
     _pd: PhantomData<F>,
@@ -56,7 +56,7 @@ pub struct SplitAtParams<F> {
     _pd: PhantomData<F>
 }
 
-impl<F: PolyOps> SplitAtParams<F> {
+impl<F: TFelt> SplitAtParams<F> {
     pub fn set_bundle_size(mut self, bundle_size: usize) -> Self {
         self.bundle_size = bundle_size;
         self
@@ -89,7 +89,7 @@ impl<F: PolyOps> SplitAtParams<F> {
     }
 }
 
-impl<F: PolyOps> SplitAt<F> {
+impl<F: TFelt> SplitAt<F> {
     pub fn new(var_idx: SplitIdx, bundle_size: usize) -> Self {
         Self {
             bundle_size,
@@ -114,7 +114,7 @@ impl<F: PolyOps> SplitAt<F> {
     }
 }
 
-impl<F: PolyOps, Dialect: TArithmeticDialect<F>> TProtocol<Dialect> for SplitAt<F> {
+impl<F: TFelt, Dialect: TArithmeticTranscript<F>> TProtocol<Dialect> for SplitAt<F> {
     type ClaimsBefore = SinglePointClaims<F>;
     type ClaimsAfter = SinglePointClaims<F>;
 
@@ -137,7 +137,7 @@ impl<F: PolyOps, Dialect: TArithmeticDialect<F>> TProtocol<Dialect> for SplitAt<
     }
 }
 
-impl<F: PolyOps, Dialect: TArithmeticDialect<F>> TProverImpl<Dialect> for SplitAt<F> {
+impl<F: TFelt, Dialect: TArithmeticTranscript<F>> TProverImpl<Dialect> for SplitAt<F> {
     type Verifier = Self;
     type ProverInput = ();
     type ProverOutput = ();

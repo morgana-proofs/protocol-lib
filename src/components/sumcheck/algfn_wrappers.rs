@@ -1,15 +1,15 @@
 use std::marker::PhantomData;
 use std::ops::Index;
 use crate::common::algfn::{AlgFn, AlgFnSO};
-use crate::common::wrapper::PolyOps;
+use crate::common::wrapper::TFelt;
 
 #[derive(Clone)]
-pub struct EqWrapper<F: PolyOps, Fun: AlgFnSO<F>> {
+pub struct EqWrapper<F: TFelt, Fun: AlgFnSO<F>> {
     f: Fun,
     _pd: PhantomData<F>,
 }
 
-impl<F: PolyOps, Fun: AlgFnSO<F>> EqWrapper<F, Fun> {
+impl<F: TFelt, Fun: AlgFnSO<F>> EqWrapper<F, Fun> {
     pub fn new(f: Fun) -> Self {
         Self {
             f,
@@ -18,7 +18,7 @@ impl<F: PolyOps, Fun: AlgFnSO<F>> EqWrapper<F, Fun> {
     }
 }
 
-impl <F: PolyOps, Fun: AlgFnSO<F>> AlgFnSO<F> for EqWrapper<F, Fun> {
+impl <F: TFelt, Fun: AlgFnSO<F>> AlgFnSO<F> for EqWrapper<F, Fun> {
     fn exec(&self, args: &impl Index<usize, Output = F>) -> F {
         self.f.exec(args) * args[self.f.n_ins()].clone()
     }
@@ -33,12 +33,12 @@ impl <F: PolyOps, Fun: AlgFnSO<F>> AlgFnSO<F> for EqWrapper<F, Fun> {
 }
 
 #[derive(Clone)]
-pub struct GammaWrapper<F: PolyOps, Fun: AlgFn<F>> {
+pub struct GammaWrapper<F: TFelt, Fun: AlgFn<F>> {
     f: Fun,
     gamma_pows: Vec<F>,
 }
 
-impl<F: PolyOps, Fun: AlgFn<F>> GammaWrapper<F, Fun> {
+impl<F: TFelt, Fun: AlgFn<F>> GammaWrapper<F, Fun> {
     pub fn new(f: Fun, gamma: F) -> Self {
         assert!(f.n_outs() > 1);
         let mut gamma_pows = Vec::with_capacity(f.n_outs() - 1);
@@ -52,7 +52,7 @@ impl<F: PolyOps, Fun: AlgFn<F>> GammaWrapper<F, Fun> {
     }
 }
 
-impl <F: PolyOps, Fun: AlgFn<F>> AlgFnSO<F> for GammaWrapper<F, Fun> {
+impl <F: TFelt, Fun: AlgFn<F>> AlgFnSO<F> for GammaWrapper<F, Fun> {
     fn exec(&self, args: &impl Index<usize, Output = F>) -> F {
         let mut out = self.f.exec(args);
         let mut ret = out.next().unwrap();

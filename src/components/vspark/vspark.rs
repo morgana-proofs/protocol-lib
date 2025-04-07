@@ -6,14 +6,14 @@ use ark_std::iterable::Iterable;
 use itertools::Itertools;
 use crate::common::algfn::{AlgFn, AlgFnSO};
 use crate::common::claims::{EvalClaim, SinglePointClaims, SumClaim};
-use crate::common::wrapper::TPrimeField;
+use crate::common::wrapper::TFelt;
 use crate::components::lookups::logup::logup::{IndexedLookupClaim, IndexedLookupInput, Logup, LookupClaim, LookupInput, LookupType};
 use crate::components::sumcheck::dense::DenseSumcheck;
 use crate::components::sumcheck::dense_eq::eq_eval;
 use crate::components::sumcheck::generic::SumcheckProtocol;
 use crate::components::sumcheck::multi_dense_eq::{MultiDenseEqSumcheck, MultiPointEvalClaim, MultiPointEvalClaimPart};
 use crate::components::sumcheck::sumcheckable::Sumcheckable;
-use crate::dialects::dialect::{TArithmeticDialect, TDialectInterface};
+use crate::transcript::transcript::{TArithmeticTranscript, TTranscriptInterface};
 use crate::protocol::component::{TProtocol, TProverImpl};
 
 pub struct Padded<T: Clone, It: Iterator<Item = T>> {
@@ -54,7 +54,7 @@ impl<T: Clone, It: Iterator<Item=T>> Pad<T> for It {
     }
 }
 
-pub struct Vspark<F: TPrimeField> {
+pub struct Vspark<F: TFelt> {
     d: usize,  // matrix number logsize
     h: usize,  // description logsize
     n: usize,  // somehow needed for tau, must be sum of some other values here
@@ -65,7 +65,7 @@ pub struct Vspark<F: TPrimeField> {
     _pd: PhantomData<F>,
 }
 
-impl<F: TPrimeField> Vspark<F> {
+impl<F: TFelt> Vspark<F> {
     fn compute_tau(n: usize, p: usize, x: &[F], r: &[F]) -> F {
         let r_off = (0..p).scan(r[0],  |acc, _| {
             *acc = *acc * r[0];
@@ -101,13 +101,13 @@ impl<F: TPrimeField> Vspark<F> {
 
 ///
 ///
-type VsparkClaimsBefore<F: TPrimeField> = EvalClaim<F>;  // claim of M[t](r_x, r_y) at point (t | r_x | r_y)
+type VsparkClaimsBefore<F: TFelt> = EvalClaim<F>;  // claim of M[t](r_x, r_y) at point (t | r_x | r_y)
 
-pub struct VsparkClaimsAfter<F: TPrimeField> {
+pub struct VsparkClaimsAfter<F: TFelt> {
     _pd: PhantomData<F>,
 }
 
-pub struct VsparkProverInput<F: TPrimeField> {
+pub struct VsparkProverInput<F: TFelt> {
     e_poly: Vec<F>,
     c_poly: Vec<F>,
     i_poly: Vec<F>,
@@ -118,14 +118,14 @@ pub struct VsparkProverInput<F: TPrimeField> {
     _pd: PhantomData<F>
 }
 
-pub struct VsparkProverOutput<F: TPrimeField> {
+pub struct VsparkProverOutput<F: TFelt> {
     _pd: PhantomData<F>
 }
 
 #[derive(Clone)]
 pub struct VsparkFinalProd<F>(F);
 
-impl<F: TPrimeField> AlgFnSO<F> for VsparkFinalProd<F> {
+impl<F: TFelt> AlgFnSO<F> for VsparkFinalProd<F> {
     fn exec(&self, args: &impl Index<usize, Output=F>) -> F {
         args[0] * args[1] * args[2] * args[3] + self.0
     }
@@ -139,11 +139,11 @@ impl<F: TPrimeField> AlgFnSO<F> for VsparkFinalProd<F> {
     }
 }
 
-impl<F: TPrimeField, Dialect: TArithmeticDialect<F>> TProtocol<Dialect> for Vspark<F> {
+impl<F: TFelt, Transcript: TArithmeticTranscript<F>> TProtocol<Transcript> for Vspark<F> {
     type ClaimsBefore = VsparkClaimsBefore<F>;
     type ClaimsAfter = VsparkClaimsAfter<F>;
 
-    fn verify(&self, ctx: &mut Dialect, claims: Self::ClaimsBefore) -> Self::ClaimsAfter {
+    fn verify(&self, ctx: &mut Transcript, claims: Self::ClaimsBefore) -> Self::ClaimsAfter {
         let EvalClaim { ev: e_ev_old, point: e_point_old } = claims;
         let (t, rs) = e_point_old.split_at(self.d);
         let (r_x, rs) = rs.split_at(self.x_logsize);
@@ -169,8 +169,8 @@ impl<F: TPrimeField, Dialect: TArithmeticDialect<F>> TProtocol<Dialect> for Vspa
         let IndexedLookupClaim{ accesses: y_acc, table: tau_y_claim, values: y_pull, indexes: y_claim } = b;
         let IndexedLookupClaim{ accesses: i_acc, table: e_claim_lookup, values: i_pull, indexes: i_claim } = c;
 
-        assert!(tau_x_claim.ev == Self::compute_tau(self.n, self.px, &tau_x_claim.point, r_x));
-        assert!(tau_y_claim.ev == Self::compute_tau(self.n, self.py, &tau_y_claim.point, r_y));
+        (tau_x_claim.ev - Self::compute_tau(self.n, self.px, &tau_x_claim.point, r_x)).require();
+        (tau_y_claim.ev - Self::compute_tau(self.n, self.py, &tau_y_claim.point, r_y)).require();
 
         let gamma = (0..self.d).map(|_| ctx.challenge()).collect_vec();
 
@@ -209,9 +209,9 @@ impl<F: TPrimeField, Dialect: TArithmeticDialect<F>> TProtocol<Dialect> for Vspa
             ],
         ));
 
-        assert!(claims_mess_1.evs[1] == claims_mess_1.evs[2]);
-        assert!(claims_mess_1.evs[4] == claims_mess_1.evs[5]);
-        assert!(claims_mess_1.evs[7] == claims_mess_1.evs[8]);
+        (claims_mess_1.evs[1] - claims_mess_1.evs[2]).require();
+        (claims_mess_1.evs[4] - claims_mess_1.evs[5]).require();
+        (claims_mess_1.evs[7] - claims_mess_1.evs[8]).require();
 
 
 
@@ -232,8 +232,8 @@ impl<F: TPrimeField, Dialect: TArithmeticDialect<F>> TProtocol<Dialect> for Vspa
             ],
         ));
 
-        assert!(claims_mess_2.evs[1] == claims_mess_2.evs[2]);
-        assert!(claims_mess_2.evs[1] == claims_mess_2.evs[3]);
+        (claims_mess_2.evs[1] - claims_mess_2.evs[2]).require();
+        (claims_mess_2.evs[1] - claims_mess_2.evs[3]).require();
 
         // All these claims should be returned.
         // This is a mess. there are actually like 12 of them.
@@ -247,12 +247,12 @@ impl<F: TPrimeField, Dialect: TArithmeticDialect<F>> TProtocol<Dialect> for Vspa
 }
 
 
-impl<F: TPrimeField, Dialect: TArithmeticDialect<F>> TProverImpl<Dialect> for Vspark<F> {
+impl<F: TFelt, Transcript: TArithmeticTranscript<F>> TProverImpl<Transcript> for Vspark<F> {
     type Verifier = Self;
     type ProverInput = VsparkProverInput<F>;
     type ProverOutput = VsparkProverOutput<F>;
 
-    fn _prove(protocol: &Self::Verifier, ctx: &mut Dialect, claims: <Self::Verifier as TProtocol<Dialect>>::ClaimsBefore, advice: Self::ProverInput) -> (<Self::Verifier as TProtocol<Dialect>>::ClaimsAfter, Self::ProverOutput) {
+    fn _prove(protocol: &Self::Verifier, ctx: &mut Transcript, claims: <Self::Verifier as TProtocol<Transcript>>::ClaimsBefore, advice: Self::ProverInput) -> (<Self::Verifier as TProtocol<Transcript>>::ClaimsAfter, Self::ProverOutput) {
 
         todo!()
     }
@@ -263,7 +263,6 @@ mod tests {
     use itertools::Itertools;
     use crate::components::vspark::vspark::{Pad, Vspark};
     use ark_bn254::Fq as F;
-    use num_traits::One;
 
     #[test]
     fn test_pad_iterator() {

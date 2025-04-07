@@ -1,8 +1,8 @@
 use std::ops::Index;
 use itertools::Itertools;
-use super::wrapper::PolyOps;
+use super::wrapper::TFelt;
 
-pub trait AlgFnSO<F: PolyOps> : Clone {
+pub trait AlgFnSO<F: TFelt> : Clone {
     /// Executes function.
     fn exec(&self, args: &impl Index<usize, Output = F>) -> F;
     /// Declares the degree.
@@ -11,7 +11,7 @@ pub trait AlgFnSO<F: PolyOps> : Clone {
     fn n_ins(&self) -> usize;
 }
 
-pub trait AlgFn<F: PolyOps> : Clone {
+pub trait AlgFn<F: TFelt> : Clone {
     /// Executes function
     fn exec(&self, args: &impl Index<usize, Output = F>) -> impl Iterator<Item = F>;
     /// Declares the degree.
@@ -35,11 +35,11 @@ impl<'a, T> Index<usize> for VerticalIndexing<'a, T> {
     }
 }
 
-pub trait AlgFnSoUtils<F: PolyOps>: AlgFnSO<F> {
+pub trait AlgFnSoUtils<F: TFelt>: AlgFnSO<F> {
     fn map_so(&self, args: &[&[F]]) -> Vec<F>;
 }
 
-impl<F: PolyOps, Fun: AlgFnSO<F>> AlgFnSoUtils<F> for Fun {
+impl<F: TFelt, Fun: AlgFnSO<F>> AlgFnSoUtils<F> for Fun {
     fn map_so(&self, args: &[&[F]]) -> Vec<F> {
         let n_ins = self.n_ins();
         let n_outs = 1;
@@ -58,12 +58,12 @@ impl<F: PolyOps, Fun: AlgFnSO<F>> AlgFnSoUtils<F> for Fun {
     }
 }
 
-pub trait AlgFnUtils<F: PolyOps> : AlgFn<F> {
+pub trait AlgFnUtils<F: TFelt> : AlgFn<F> {
     fn map(&self, args: &[&[F]]) -> Vec<Vec<F>>;
     fn map_split_hi(&self, args: &[&[F]]) -> [Vec<Vec<F>>; 2];
 }
 
-impl<F: PolyOps, Fun: AlgFn<F>> AlgFnUtils<F> for Fun {
+impl<F: TFelt, Fun: AlgFn<F>> AlgFnUtils<F> for Fun {
     fn map(&self, args: &[&[F]]) -> Vec<Vec<F>> {
         let n_ins = self.n_ins();
         let n_outs = self.n_outs();

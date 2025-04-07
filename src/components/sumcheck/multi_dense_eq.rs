@@ -1,31 +1,24 @@
-use std::cmp::min;
-use rayon::iter::ParallelIterator;
-use std::iter::{once, repeat_n};
+use std::iter::once;
 use std::marker::PhantomData;
 use std::ops::Index;
 use itertools::Itertools;
-use rayon::current_num_threads;
-use rayon::prelude::IntoParallelIterator;
-use crate::common::algfn::{AlgFn, AlgFnSO};
+use crate::common::algfn::AlgFnSO;
 use crate::common::claims::{EvalClaim, SinglePointClaims, SumClaim};
-use crate::common::math::{bind_dense_poly, eq_poly_sequence_last, evaluate_univar, from_evals};
-use crate::common::wrapper::{PolyOps, TPrimeField};
-use crate::components::lookups::logup::logup::LogupMainphase;
-use crate::components::sumcheck::algfn_wrappers::{EqWrapper, GammaWrapper};
-use crate::components::sumcheck::dense_eq::{eq_eval, gamma_rlc, DenseSumcheckableSO};
+use crate::common::math::eq_poly_sequence_last;
+use crate::common::wrapper::{ComputationalField, TFelt};
+use crate::components::sumcheck::dense_eq::{eq_eval, DenseSumcheckableSO};
 use crate::components::sumcheck::generic::{SumcheckGenericProverImpl, SumcheckProtocol};
-use crate::components::sumcheck::sumcheckable::{FoldToSumcheckable, Sumcheckable};
-use crate::dialects::dialect::TArithmeticDialect;
+use crate::transcript::transcript::TArithmeticTranscript;
 use crate::protocol::component::{TProtocol, TProverImpl};
 
 
-pub struct MultiDenseEqSumcheck<F: TPrimeField> {
+pub struct MultiDenseEqSumcheck<F: TFelt> {
     pub num_vars: usize,
     _pd: PhantomData<F>,
 }
 
 
-impl<F: TPrimeField> MultiDenseEqSumcheck<F> {
+impl<F: TFelt> MultiDenseEqSumcheck<F> {
     pub fn new(num_vars: usize) -> Self {
         Self { num_vars, _pd: PhantomData }
     }
@@ -38,7 +31,7 @@ pub struct MultiPointEvalClaimPart<F> {
     point_id: usize,
     ev: F
 }
-impl<F: TPrimeField> MultiPointEvalClaimPart<F> {
+impl<F: TFelt> MultiPointEvalClaimPart<F> {
     pub fn new(poly_id: usize, point_id: usize, ev: F) -> Self {
         Self { poly_id, point_id, ev }
     }
@@ -50,7 +43,7 @@ pub struct MultiPointEvalClaim<F> {
     evals: Vec<MultiPointEvalClaimPart<F>>,
 }
 
-impl <F: TPrimeField> MultiPointEvalClaim<F> {
+impl <F: TFelt> MultiPointEvalClaim<F> {
     pub fn new(points: Vec<Vec<F>>, evals: Vec<MultiPointEvalClaimPart<F>>) -> Self {
         Self {
             points,
@@ -61,17 +54,17 @@ impl <F: TPrimeField> MultiPointEvalClaim<F> {
 
 
 #[derive(Clone)]
-pub struct MultiPointCombinator<F: TPrimeField> {
+pub struct MultiPointCombinator<F: TFelt> {
     sizes: Vec<usize>,
     gammas: Vec<F>
 }
-impl<F: TPrimeField> MultiPointCombinator<F> {
+impl<F: TFelt> MultiPointCombinator<F> {
     pub fn new(sizes: Vec<usize>, gammas: Vec<F>) -> Self {
         Self { sizes, gammas }
     }
 }
 
-impl<F: TPrimeField> AlgFnSO<F> for MultiPointCombinator<F> {
+impl<F: TFelt> AlgFnSO<F> for MultiPointCombinator<F> {
     fn exec(&self, args: &impl Index<usize, Output=F>) -> F {
         let mut i = 0;
         self.sizes.iter().zip_eq(self.gammas.iter()).map(|(size, gamma)| {
@@ -96,12 +89,12 @@ impl<F: TPrimeField> AlgFnSO<F> for MultiPointCombinator<F> {
     }
 }
 
-impl <F: TPrimeField, Dialect: TArithmeticDialect<F>> TProtocol<Dialect> for MultiDenseEqSumcheck<F> {
+impl <F: TFelt, Transcript: TArithmeticTranscript<F>> TProtocol<Transcript> for MultiDenseEqSumcheck<F> {
     type ClaimsBefore = MultiPointEvalClaim<F>;
     type ClaimsAfter = SinglePointClaims<F>;
 
 
-    fn verify(&self, ctx: &mut Dialect, claims: Self::ClaimsBefore) -> Self::ClaimsAfter {
+    fn verify(&self, ctx: &mut Transcript, claims: Self::ClaimsBefore) -> Self::ClaimsAfter {
         let MultiPointEvalClaim { points, evals } = claims;
 
         let evals = evals.into_iter().enumerate()
@@ -134,17 +127,16 @@ impl <F: TPrimeField, Dialect: TArithmeticDialect<F>> TProtocol<Dialect> for Mul
         println!("{:?}", poly_evs);
 
         let mut i = 0;
-        assert_eq!(
-            ev,
+        (
+            ev -
             f.exec(
                 &evals.iter().map(|(point_id, evs)| {
                     let res = poly_evs[i..(i + evs.len())].iter().cloned().chain(once(eq_eval(&points[*point_id], &output_point)));
                     i += evs.len();
                     res
                 }).flatten().collect_vec()
-            ),
-            "Final combinator check has failed."
-        );
+            )
+        ).require();
 
         SinglePointClaims {
             point: output_point,
@@ -157,12 +149,12 @@ impl <F: TPrimeField, Dialect: TArithmeticDialect<F>> TProtocol<Dialect> for Mul
     }
 }
 
-impl<F: TPrimeField, Dialect: TArithmeticDialect<F>> TProverImpl<Dialect> for MultiDenseEqSumcheck<F> {
+impl<F: ComputationalField, Transcript: TArithmeticTranscript<F>> TProverImpl<Transcript> for MultiDenseEqSumcheck<F> {
     type Verifier = Self;
     type ProverInput = Vec<Vec<F>>;
     type ProverOutput = ();
 
-    fn _prove(protocol: &Self::Verifier, ctx: &mut Dialect, claims: <Self as TProtocol<Dialect>>::ClaimsBefore, advice: Self::ProverInput) -> (<Self as TProtocol<Dialect>>::ClaimsAfter, Self::ProverOutput) {
+    fn _prove(protocol: &Self::Verifier, ctx: &mut Transcript, claims: <Self as TProtocol<Transcript>>::ClaimsBefore, advice: Self::ProverInput) -> (<Self as TProtocol<Transcript>>::ClaimsAfter, Self::ProverOutput) {
 
         let MultiPointEvalClaim { points, evals } = claims;
 
@@ -251,7 +243,7 @@ impl<F: TPrimeField, Dialect: TArithmeticDialect<F>> TProverImpl<Dialect> for Mu
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::dialects::dialect::tests::ManualTestDialect;
+    use crate::transcript::transcript::tests::ManualTestTranscript as ManualTestTranscript;
     use ark_bn254::Fq as F;
     use ark_ff::Field;
     use ark_std::{test_rng, UniformRand};
@@ -282,7 +274,7 @@ mod tests {
 
         let sumcheck = MultiDenseEqSumcheck::new(logsize);
 
-        let mut transcript_p = ManualTestDialect::new((0..1000).map(|_| F::rand(rng)).collect_vec());
+        let mut transcript_p = ManualTestTranscript::new((0..1000).map(|_| F::rand(rng)).collect_vec());
 
         let (output_claims, _) = sumcheck.prove::<MultiDenseEqSumcheck<_,>>(&mut transcript_p, claim.clone(), polys.clone());
 

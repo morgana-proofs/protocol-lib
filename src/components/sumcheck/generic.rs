@@ -1,7 +1,7 @@
 use std::marker::PhantomData;
 use itertools::Itertools;
 
-use crate::{common::{algfn::AlgFnSO, math::{compress, decompress, evaluate_univar}, wrapper::{PolyOps, TPrimeField}}, dialects::dialect::TArithmeticDialect, protocol::component::{TProtocol, TProverImpl}};
+use crate::{common::{algfn::AlgFnSO, math::{compress, decompress, evaluate_univar}, wrapper::{ComputationalField, TFelt}}, transcript::transcript::TArithmeticTranscript, protocol::component::{TProtocol, TProverImpl}};
 pub(crate) use crate::common::claims::{EvalClaim, SumClaim};
 use crate::common::claims::SinglePointClaims;
 use crate::components::sumcheck::dense_eq::DenseEqSumcheck;
@@ -10,24 +10,24 @@ use super::sumcheckable::Sumcheckable;
 
 /// A sumcheck with single output, without eq multiplier.
 #[derive(Clone)]
-pub struct SumcheckProtocol<F: PolyOps, Fun: AlgFnSO<F>> {
+pub struct SumcheckProtocol<F: TFelt, Fun: AlgFnSO<F>> {
     pub(crate) f: Fun,
     pub(crate) num_vars: usize,
     _marker: PhantomData<F>,
 }
 
-impl<F: PolyOps, Fun: AlgFnSO<F>> SumcheckProtocol<F, Fun> {
+impl<F: TFelt, Fun: AlgFnSO<F>> SumcheckProtocol<F, Fun> {
     pub fn new(f: Fun, num_vars: usize) -> Self {
         Self { f, num_vars, _marker: PhantomData }
     }
 }
 
 
-impl<F: PolyOps, Fun: AlgFnSO<F>, Dialect: TArithmeticDialect<F>> TProtocol<Dialect> for SumcheckProtocol<F, Fun> {
+impl<F: TFelt, Fun: AlgFnSO<F>, Transcript: TArithmeticTranscript<F>> TProtocol<Transcript> for SumcheckProtocol<F, Fun> {
     type ClaimsBefore = SumClaim<F>;
     type ClaimsAfter = EvalClaim<F>;
     
-    fn verify(&self, ctx: &mut Dialect, claims: Self::ClaimsBefore) -> Self::ClaimsAfter {
+    fn verify(&self, ctx: &mut Transcript, claims: Self::ClaimsBefore) -> Self::ClaimsAfter {
         let d = self.f.deg();
         let mut sum_claim = claims.0;
         let mut rs = vec![];
@@ -43,15 +43,15 @@ impl<F: PolyOps, Fun: AlgFnSO<F>, Dialect: TArithmeticDialect<F>> TProtocol<Dial
     }
 }
 
-pub struct SumcheckGenericProverImpl<F: TPrimeField, Fun: AlgFnSO<F>, S: Sumcheckable<F>> {
+pub struct SumcheckGenericProverImpl<F: TFelt, Fun: AlgFnSO<F>, S: Sumcheckable<F>> {
     _marker: PhantomData<(F, Fun, S)>,
 }
-impl<F: TPrimeField, Fun: AlgFnSO<F>, S: Sumcheckable<F>, Dialect: TArithmeticDialect<F>> TProverImpl<Dialect> for SumcheckGenericProverImpl<F, Fun, S> {
+impl<F: ComputationalField, Fun: AlgFnSO<F>, S: Sumcheckable<F>, Transcript: TArithmeticTranscript<F>> TProverImpl<Transcript> for SumcheckGenericProverImpl<F, Fun, S> {
     type Verifier = SumcheckProtocol<F, Fun>;
     type ProverInput = S;
     type ProverOutput = Vec<F>; // final evals
 
-    fn _prove(protocol: &Self::Verifier, ctx: &mut Dialect, claims: <Self::Verifier as TProtocol<Dialect>>::ClaimsBefore, mut sumcheckable: Self::ProverInput) -> (<Self::Verifier as TProtocol<Dialect>>::ClaimsAfter, Self::ProverOutput) {
+    fn _prove(protocol: &Self::Verifier, ctx: &mut Transcript, claims: <Self::Verifier as TProtocol<Transcript>>::ClaimsBefore, mut sumcheckable: Self::ProverInput) -> (<Self::Verifier as TProtocol<Transcript>>::ClaimsAfter, Self::ProverOutput) {
         let d = protocol.f.deg();
         let mut sum_claim = claims.0;
         let mut rs = vec![];

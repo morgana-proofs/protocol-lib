@@ -1,14 +1,14 @@
 use std::iter::{once, repeat};
 use itertools::Itertools;
-use super::wrapper::{PolyOps, TPrimeField};
+use super::wrapper::{ComputationalField, TFelt};
 
 /// Computes polynomial coefficients from values in points 0, 1, 2, ..., n
-pub fn from_evals<F: TPrimeField>(evals: &[F]) -> Vec<F> {
+pub fn from_evals<F: ComputationalField>(evals: &[F]) -> Vec<F> {
     vandermonde_interpolation(evals)
 }
 
 
-pub fn evaluate_univar<F: PolyOps>(poly: &[F], x: &F) -> F {
+pub fn evaluate_univar<F: TFelt>(poly: &[F], x: &F) -> F {
     let l = poly.len();
     assert!(l > 0);
     let mut run = poly[l - 1].clone();
@@ -20,31 +20,27 @@ pub fn evaluate_univar<F: PolyOps>(poly: &[F], x: &F) -> F {
 }
 
 /// Returns p(0) + p(1) and all coefficients but the 1st one.
-/// Only uses PolyOps
-pub fn compress<F: PolyOps>(coeffs: &[F]) -> (F, Vec<F>) {
-    let lc_with : Vec<_> = once(2).chain(repeat(1)).take(coeffs.len()).map(|x| F::Constants::from(x)).collect(); // 2, 1, 1, 1 ...
-    let sum = F::lc(&lc_with, coeffs);
+pub fn compress<F: TFelt>(coeffs: &[F]) -> (F, Vec<F>) {
+    let sum = coeffs.iter().fold(coeffs[0], |acc, upd| acc + upd); // add with coefficients 2, 1, 1, 1, 1 ...
     let coeffs_without_1st : Vec<F> = once(&coeffs[0]).chain(coeffs[2..].iter()).map(|x| x.clone()).collect();
     (sum, coeffs_without_1st)
 }
 
 /// Reverts compression
-pub fn decompress<F: PolyOps>(sum: &F, coeffs_without_1st: &[F]) -> Vec<F> {
-    let joined: Vec<F> = once(sum).chain(coeffs_without_1st.iter()).map(|x|x.clone()).collect(); // sum, coeff0, coeff2, coeff3 ...
-    let lc_with : Vec<F::Constants> = once(F::Constants::from(1)).chain(once(-F::Constants::from(2))).chain(repeat(-F::Constants::from(1))).take(joined.len()).collect(); // 1, -2, -1, -1, -1, ...
-    let first_coeff = F::lc(&lc_with, &joined);
+pub fn decompress<F: TFelt>(sum: &F, coeffs_without_1st: &[F]) -> Vec<F> {
+    let first_coeff = coeffs_without_1st.iter().fold(*sum - coeffs_without_1st[0], |acc, upd| acc - upd); // sum - 2 * coeff[0] - coeff[1] - coeff[2] ...
     once(&coeffs_without_1st[0]).chain(once(&first_coeff)).chain(coeffs_without_1st[1..].iter()).map(|x| x.clone()).collect()
 }
 
-pub fn bind_dense_poly<F: TPrimeField>(poly: &mut Vec<F>, t: F) {
+pub fn bind_dense_poly<F: TFelt>(poly: &mut Vec<F>, t: F) {
     let half = poly.len() / 2;
     *poly = (0..half).into_iter().map(|i| poly[2*i] + t * (poly[2*i + 1] - poly[2*i])).collect();
 }
 // Vandermonde interpolation shamelessly stolen from liblasso.
 
-pub fn vandermonde_interpolation<F: TPrimeField>(evals: &[F]) -> Vec<F> {
+pub fn vandermonde_interpolation<F: ComputationalField>(evals: &[F]) -> Vec<F> {
     let n = evals.len();
-    let xs: Vec<F> = (0..n).map(|x| F::from(x as u64)).collect();
+    let xs: Vec<F> = (0..n).map(|x| F::from_const(x as u64)).collect();
 
     let mut vandermonde: Vec<Vec<F>> = Vec::with_capacity(n);
     for i in 0..n {
@@ -63,7 +59,7 @@ pub fn vandermonde_interpolation<F: TPrimeField>(evals: &[F]) -> Vec<F> {
 }
 
 
-pub fn gaussian_elimination<F: TPrimeField>(matrix: &mut [Vec<F>]) -> Vec<F> {
+pub fn gaussian_elimination<F: ComputationalField>(matrix: &mut [Vec<F>]) -> Vec<F> {
 let size = matrix.len();
 assert_eq!(size, matrix[0].len() - 1);
 
@@ -88,16 +84,16 @@ for i in 0..size {
 
 let mut result: Vec<F> = vec![F::zero(); size];
 for i in 0..size {
-    result[i] = matrix[i][size] * matrix[i][i].invert().unwrap();
+    result[i] = matrix[i][size] * matrix[i][i].invert();
 }
 result
 }
 
-fn echelon<F: TPrimeField>(matrix: &mut [Vec<F>], i: usize, j: usize) {
+fn echelon<F: ComputationalField>(matrix: &mut [Vec<F>], i: usize, j: usize) {
     let size = matrix.len();
     if matrix[i][i] == F::zero() {
     } else {
-        let factor = matrix[j + 1][i] * matrix[i][i].invert().unwrap();
+        let factor = matrix[j + 1][i] * matrix[i][i].invert();
         (i..size + 1).for_each(|k| {
             let tmp = matrix[i][k];
             matrix[j + 1][k] = matrix[j + 1][k] - factor * tmp;
@@ -105,12 +101,12 @@ fn echelon<F: TPrimeField>(matrix: &mut [Vec<F>], i: usize, j: usize) {
     }
   }
   
-fn eliminate<F: TPrimeField>(matrix: &mut [Vec<F>], i: usize) {
+fn eliminate<F: ComputationalField>(matrix: &mut [Vec<F>], i: usize) {
     let size = matrix.len();
     if matrix[i][i] == F::zero() {
     } else {
         for j in (1..i + 1).rev() {
-        let factor = matrix[j - 1][i] * matrix[i][i].invert().unwrap();
+        let factor = matrix[j - 1][i] * matrix[i][i].invert();
         for k in (0..size + 1).rev() {
             let tmp = matrix[i][k];
             matrix[j - 1][k] = matrix[j - 1][k] - factor * tmp;
@@ -120,12 +116,12 @@ fn eliminate<F: TPrimeField>(matrix: &mut [Vec<F>], i: usize) {
 }
 
 // EQ poly evals
-struct EQPolyEvaluator<F: TPrimeField> {
+struct EQPolyEvaluator<F: TFelt> {
     padding_size: usize,
     multiplier: F,
 }
 
-impl<F: TPrimeField> EQPolyEvaluator<F> {
+impl<F: TFelt> EQPolyEvaluator<F> {
     fn new() -> Self {
         Self {
             padding_size: 0,
@@ -204,29 +200,29 @@ impl<F: TPrimeField> EQPolyEvaluator<F> {
         self.seq(pt).pop()
     }
 }
-pub fn padded_eq_poly_sequence<F: TPrimeField>(padding_size: usize, pt: &[F]) -> Vec<Vec<F>> {
+pub fn padded_eq_poly_sequence<F: TFelt>(padding_size: usize, pt: &[F]) -> Vec<Vec<F>> {
     EQPolyEvaluator::from_padding(padding_size).seq(pt)
 }
 
-pub fn eq_poly_sequence<F: TPrimeField>(pt: &[F]) -> Vec<Vec<F>> {
+pub fn eq_poly_sequence<F: TFelt>(pt: &[F]) -> Vec<Vec<F>> {
     EQPolyEvaluator::new().seq(pt)
 }
 
-pub fn eq_poly_sequence_last<F: TPrimeField>(pt: &[F]) -> Option<Vec<F>> {
+pub fn eq_poly_sequence_last<F: TFelt>(pt: &[F]) -> Option<Vec<F>> {
     EQPolyEvaluator::new().last(pt)
 }
 
-pub fn eq_poly_sequence_from_multiplier_last<F: TPrimeField>(mul: F, pt: &[F]) -> Option<Vec<F>> {
+pub fn eq_poly_sequence_from_multiplier_last<F: TFelt>(mul: F, pt: &[F]) -> Option<Vec<F>> {
     EQPolyEvaluator::from_multiplier(mul).last(pt)
 }
 
 // multivar poly
-pub fn evaluate_multivar<F: TPrimeField>(poly: &[F], pt: &[F]) -> F {
+pub fn evaluate_multivar<F: TFelt>(poly: &[F], pt: &[F]) -> F {
     let e_p = eq_poly_sequence_last(&pt.to_vec()).unwrap();
     poly.iter().zip_eq(e_p.iter()).map(|(&a, b)| a * b).fold(F::zero(), |x, y| x + y)
 }
 
-pub fn evaluate_index_poly<F: TPrimeField>(pt: &[F]) -> F {
+pub fn evaluate_index_poly<F: TFelt>(pt: &[F]) -> F {
     let mut c = F::one();
     pt.iter().map(|x| {
         let res = *x * c;
