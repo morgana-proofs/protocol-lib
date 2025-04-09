@@ -1,8 +1,11 @@
 use std::fmt::{Display, Formatter};
+use std::iter::once;
+use std::ops::BitXor;
+use ark_std::iterable::Iterable;
 use ark_std::log2;
 use itertools::Itertools;
-use crate::common::wrapper::TFelt;
-
+use crate::common::wrapper::{ComputationalField, TFelt};
+use crate::components::sumcheck::dense_eq::eq_eval;
 
 #[derive(Debug, Default, Copy, Clone)]
 pub struct AdmSubset {
@@ -98,14 +101,20 @@ impl AdmSubset {
         (2 * ((1usize << p) * a + u) + 1) * (1usize << k)
     }
 
-    pub fn decode(p: usize, mut code: usize) -> Option<Self> {
+    pub fn decode(n: usize, p: usize, mut code: usize) -> Option<Self> {
         if code == 0 {
             None
         } else {
             let k = code.trailing_zeros() as usize;
+            if k + p + 1 > n + 1 {
+                return None;
+            }
             code >>= k + 1;
             let a = code >> p;
             let u = code & ((1 << p) - 1);
+            if k != 0 && u != 0 {
+                return None;
+            }
             Some(Self {
                 p,
                 a,
@@ -118,34 +127,64 @@ impl AdmSubset {
 }
 
 
-pub fn compute_tau<F: TFelt>(n: usize, s: AdmSubset, r: &[F]) -> F {
-    // eldest n - k - p bits: eq a, r
-    let mut ret = (0..n - s.k - s.p).scan(1usize, |acc, _| {
-        let r = *acc & s.a == 0;
-        *acc <<= 1;
-        Some(F::from_const(r as u64))
-    }).zip(&r[r.len() + s.p + s.k - n..]).fold(F::zero(), |acc, (x, &y)| {
-        acc + (F::one() - x - y + (x * y).double())
-    });
-    if s.u != 0 {
-        let powers = (0..(usize::BITS - s.u.leading_zeros())).scan(r[0],  |acc, _| {
-            let ret = *acc;
-            *acc = *acc * *acc;
-            Some(ret)
-        }).collect_vec();
-
-        let mul = (0..(usize::BITS - s.u.leading_zeros())).filter_map(|i| {
-            if s.u & (1 << i) != 0 {
-                Some(powers[i as usize])
-            } else {
-                None
-            }
-        }).fold(F::zero(), |acc, elt| {
-            acc + elt
-        });
-        ret = ret * mul;
+pub fn compute_tau<F: ComputationalField>(n: usize, s: AdmSubset, r: &[F]) -> F {
+    let mut partial =  F::one();
+    if s.k == 0 {
+        partial = r[0].static_pow(&[s.u as u64]);
     }
-    ret
+
+    let a_width = n - s.k - s.p;
+    let full = eq_eval(&r[(r.len() - a_width)..], &(0..a_width).map(|i| F::from_const(((s.a >> i) & 1) as u64)).collect_vec());
+    partial * full
+}
+
+pub fn compute_tau_table<F: ComputationalField>(n: usize, p: usize, r: &[F]) -> Vec<F> {
+    if p == 0 {
+        assert!(r.len() == n - p);
+    } else {
+        assert!(r.len() == n + 1 - p);
+    }
+    (0usize..(1 << (n + 1)))
+        .map(|i|
+            AdmSubset::decode(n, p, i).map_or(F::zero(), |s| compute_tau(n, s, r))
+        )
+        .collect_vec()
+}
+
+
+pub fn hybrid_eq_eval<F: TFelt>(r: &[F], x: &[F]) -> F {
+    r.iter().zip_eq(x)
+        .map(|(r, x)| {
+            *x * r + (F::one() - x)
+        }).fold(F::one(), |acc, x| acc * x)
+}
+
+pub fn compute_tau_at_point<F: TFelt>(n: usize, p: usize, x: &[F], r: &[F]) -> F {
+    assert!(x.len() == n + 1);
+    let mut r = r.to_vec();
+    if p != 0 {
+        let mut powers = vec![r[0]];
+        for _ in 1..p {
+            let tmp = powers.last().unwrap();
+            powers.push(*tmp * tmp);
+        }
+        powers.extend_from_slice(&r[1..]);
+        r = powers;
+    }
+    assert_eq!(r.len(), n);
+
+    let partials = x[0] * hybrid_eq_eval(&r[0..p], &x[1..(p + 1)]) * eq_eval(&r[p..], &x[(p + 1)..]);
+    let mut fulls = F::zero();
+
+    // k = 2; (1 - x_0)
+    for k in 1..(n + 1 - p) {
+        let mut tmp = (0..k).map(|i| F::one() - x[i]).fold(F::one(), |acc, x| acc * x);
+        tmp = tmp * x[k];
+        tmp = tmp * (k + 1..k + p + 1).map(|i| F::one() - x[i]).fold(F::one(), |acc, x| acc * x);
+        tmp = tmp * eq_eval(&x[(k + p + 1)..(n + 1)], &r[(k + p)..]);
+        fulls = fulls + tmp;
+    }
+    partials + fulls
 }
 
 impl Display for AdmSubset{
@@ -322,6 +361,7 @@ impl <F: TFelt> VsparkMatrixGroup<F> {
 mod tests {
     use super::*;
     use ark_bn254::Fq as F;
+    use crate::common::wrapper::TFeltUtil;
 
     #[test]
     fn test_as_rowwise_dense() {
@@ -459,7 +499,7 @@ mod tests {
     fn test_encodings() {
         let p = 3;
         for i in 0usize..100 {
-            AdmSubset::decode(p, i).map(|x| {
+            AdmSubset::decode(5, p, i).map(|x| {
                 let res = x.encode();
                 assert_eq!(i, res, "{}, {}, {}", i, x, res);
             });
@@ -468,10 +508,41 @@ mod tests {
 
     #[test]
     fn test_tau() {
-        compute_tau(5, AdmSubset::decode(3, 5).unwrap(), &vec![
-            F::from(1),
-            F::from(2),
-            F::from(3),
-        ]);
+        let n = 5;
+        let p = 0;
+        let r = vec![
+            F::from(1012),
+            F::from(1123),
+            F::from(3121),
+            F::from(21231),
+            F::from(12312),
+        ];
+        let mut err = (vec![], vec![]);
+        for idx in (0..(1 << (n + 1))) {
+            let decode = AdmSubset::decode(n, p, idx as usize);
+            let mut res1 = F::zero();
+            if let Some(s) = decode {
+                res1 = compute_tau(n, s, &r);
+            }
+            let x = vec![
+                F::from((idx >> 0) & 1),
+                F::from((idx >> 1) & 1),
+                F::from((idx >> 2) & 1),
+                F::from((idx >> 3) & 1),
+                F::from((idx >> 4) & 1),
+                F::from((idx >> 5) & 1),
+            ];
+            let res2 = compute_tau_at_point(n, p, &x, &r);
+            if res1 != res2 {
+                err.0.push(idx);
+                err.1.push((res1, res2));
+            }
+        }
+
+        println!("{:?}", err.0);
+        for (a, b) in err.1 {
+            println!("{} {}", a, b);
+        }
+        assert_eq!(err.0, vec![]);
     }
 }
