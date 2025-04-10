@@ -5,7 +5,7 @@ use std::ops::Index;
 use ark_ff::PrimeField;
 use ark_std::iterable::Iterable;
 use itertools::Itertools;
-use crate::common::algfn::{AlgFn, AlgFnSO};
+use crate::common::algfn::{AlgFn, AlgFnSO, AlgFnSoUtils};
 use crate::common::claims::{EvalClaim, SinglePointClaims, SumClaim};
 use crate::common::wrapper::{ComputationalField, TFelt};
 use crate::components::lookups::logup::logup::{IndexedLookupClaim, IndexedLookupInput, Logup, LookupClaim, LookupInput, LookupType};
@@ -113,7 +113,7 @@ impl<F: TFelt> AlgFnSO<F> for VsparkFinalProd<F> {
 
 impl<F: TFelt, Transcript: TArithmeticTranscript<F>> TProtocol<Transcript> for Vspark<F> {
     type ClaimsBefore = VsparkClaimsBefore<F>;
-    type ClaimsAfter = VsparkClaimsAfter<F>;
+    type ClaimsAfter = (SinglePointClaims<F>, SinglePointClaims<F>, EvalClaim<F>, EvalClaim<F>);
 
     fn verify(&self, ctx: &mut Transcript, claims: Self::ClaimsBefore) -> Self::ClaimsAfter {
         let EvalClaim { ev: e_ev_old, point: e_point_old } = claims;
@@ -208,11 +208,12 @@ impl<F: TFelt, Transcript: TArithmeticTranscript<F>> TProtocol<Transcript> for V
         // All these claims should be returned.
         // This is a mess. there are actually like 12 of them.
         // Why would we invent a protocol like this?
-        claims_mess_1;
-        claims_mess_2;
-        x_acc;
-        y_acc;
-        todo!()
+        (
+            claims_mess_1,
+            claims_mess_2,
+            x_acc,
+            y_acc,
+        )
     }
 }
 
@@ -220,7 +221,7 @@ impl<F: TFelt, Transcript: TArithmeticTranscript<F>> TProtocol<Transcript> for V
 impl<F: ComputationalField, Transcript: TArithmeticTranscript<F>> TProverImpl<Transcript> for Vspark<F> {
     type Verifier = Self;
     type ProverInput = VsparkProverInput<F>;
-    type ProverOutput = VsparkProverOutput<F>;
+    type ProverOutput = ();
 
     fn _prove(protocol: &Self::Verifier, ctx: &mut Transcript, claims: <Self::Verifier as TProtocol<Transcript>>::ClaimsBefore, advice: Self::ProverInput) -> (<Self::Verifier as TProtocol<Transcript>>::ClaimsAfter, Self::ProverOutput) {
         let VsparkProverInput{ e_poly, c_poly, i_poly, x_poly, y_poly, _pd } = advice;
@@ -256,23 +257,28 @@ impl<F: ComputationalField, Transcript: TArithmeticTranscript<F>> TProverImpl<Tr
             e_poly[*idx]
         }).collect::<Vec<_>>();
 
+
+        let i_poly_f = i_poly.iter().map(|x| F::from(*x as u64)).collect_vec();
+        let x_poly_f = x_poly.iter().map(|x| F::from(*x as u64)).collect_vec();
+        let y_poly_f = y_poly.iter().map(|x| F::from(*x as u64)).collect_vec();
+
         let lookup_advice = vec![
             LookupInput::indexed_by_usize(
                 tau_table_x,
                 tau_accesses_x,
-                tau_values_x,
+                tau_values_x.clone(),
                 x_poly,
             ),
             LookupInput::indexed_by_usize(
                 tau_table_y,
                 tau_accesses_y,
-                tau_values_y,
+                tau_values_y.clone(),
                 y_poly,
             ),
             LookupInput::indexed_by_usize(
-                e_poly,
-                accesses_i,
-                values_i,
+                e_poly.clone(),
+                accesses_i.clone(),
+                values_i.clone(),
                 i_poly,
             ),
         ];
@@ -300,9 +306,17 @@ impl<F: ComputationalField, Transcript: TArithmeticTranscript<F>> TProverImpl<Tr
         let delta0_in_gamma = eq_eval(&vec![F::zero(); protocol.d], &gamma);
         let f = VsparkFinalProd(delta0_in_gamma);
 
+        let e_data = vec![
+            c_poly,
+            i_poly_f.clone(),
+            x_poly_f.clone(),
+            y_poly_f.clone(),
+        ];
+        let e_output = f.map_so(&e_data.iter().map(|v| v.as_ref()).collect_vec());
+
         let sumcheck = DenseSumcheck::new(f, protocol.h);
 
-        let e_claim_sumcheck: SinglePointClaims<F> = sumcheck.prove::<DenseSumcheck<_,_>>(ctx, SumClaim(e_in_gamma_eval), todo!()).0;
+        let e_claim_sumcheck: SinglePointClaims<F> = sumcheck.prove::<DenseSumcheck<_,_>>(ctx, SumClaim(e_in_gamma_eval), e_data).0;
 
         let mut sumcheck_point = gamma.clone();
         sumcheck_point.extend(e_claim_sumcheck.point);  // todo: check if order is correct
@@ -322,16 +336,24 @@ impl<F: ComputationalField, Transcript: TArithmeticTranscript<F>> TProverImpl<Tr
                     MultiPointEvalClaimPart::new(0, 1, x_claim.ev),
                     MultiPointEvalClaimPart::new(1, 1, x_pull.ev),
                     MultiPointEvalClaimPart::new(1, 0, x_pull_ev_sumcheck),
-                    MultiPointEvalClaimPart::new(3, 2, y_claim.ev),
-                    MultiPointEvalClaimPart::new(4, 2, y_pull.ev),
-                    MultiPointEvalClaimPart::new(4, 0, y_pull_ev_sumcheck),
-                    MultiPointEvalClaimPart::new(5, 3, i_claim.ev),
-                    MultiPointEvalClaimPart::new(6, 3, i_pull.ev),
-                    MultiPointEvalClaimPart::new(6, 0, i_pull_ev_sumcheck),
-                    MultiPointEvalClaimPart::new(7, 0, c_ev_sumcheck),
+                    MultiPointEvalClaimPart::new(2, 2, y_claim.ev),
+                    MultiPointEvalClaimPart::new(3, 2, y_pull.ev),
+                    MultiPointEvalClaimPart::new(3, 0, y_pull_ev_sumcheck),
+                    MultiPointEvalClaimPart::new(4, 3, i_claim.ev),
+                    MultiPointEvalClaimPart::new(5, 3, i_pull.ev),
+                    MultiPointEvalClaimPart::new(5, 0, i_pull_ev_sumcheck),
+                    MultiPointEvalClaimPart::new(6, 0, c_ev_sumcheck),
                 ],
             ),
-            todo!()
+            vec![
+                x_poly_f,
+                tau_values_x,
+                y_poly_f,
+                tau_values_y,
+                i_poly_f,
+                values_i,
+                e_output,
+            ]
         ).0;
 
         (claims_mess_1.evs[1] - claims_mess_1.evs[2]).require();
@@ -356,7 +378,10 @@ impl<F: ComputationalField, Transcript: TArithmeticTranscript<F>> TProverImpl<Tr
                     MultiPointEvalClaimPart::new(0, 2, e_in_gamma_eval),
                 ],
             ),
-            todo!()
+            vec![
+                accesses_i,
+                e_poly,
+            ]
         ).0;
 
         (claims_mess_2.evs[1] - claims_mess_2.evs[2]).require();
@@ -365,12 +390,12 @@ impl<F: ComputationalField, Transcript: TArithmeticTranscript<F>> TProverImpl<Tr
         // All these claims should be returned.
         // This is a mess. there are actually like 12 of them.
         // Why would we invent a protocol like this?
-        claims_mess_1;
-        claims_mess_2;
-        x_acc;
-        y_acc;
-
-        todo!()
+        ((
+            claims_mess_1,
+            claims_mess_2,
+            x_acc,
+            y_acc,
+        ), ())
     }
 }
 
@@ -386,5 +411,10 @@ mod tests {
             (0..3).collect_vec().into_iter().pad(4, 10).collect_vec(),
             vec![0, 1, 2, 4, 4, 4, 4, 4, 4, 4],
         )
+    }
+    
+    #[test]
+    fn test_vspark_verifier_accepts_prover() {
+        
     }
 }

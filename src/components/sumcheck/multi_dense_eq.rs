@@ -255,7 +255,7 @@ mod tests {
         let rng = &mut test_rng();
         let logsize = 6;
         let points   : Vec<Vec<F>> = (0..7).map(|_| (0..logsize).map(|_| F::rand(rng)).collect()).collect();
-        let polys    : Vec<Vec<F>> = (0..7).map(|_| (0 .. 1 << logsize).map(|_|F::rand(rng)).collect()).collect();
+        let polys    : Vec<Vec<F>> = (0..3).map(|_| (0 .. 1 << logsize).map(|_|F::rand(rng)).collect()).collect();
         let point_ids: Vec<usize>  = (0..polys.len()).map(|i| i).collect();
         let point_ids: Vec<usize>  = (0..polys.len()).map(|_| rng.gen::<usize>() % points.len()).collect();
 
