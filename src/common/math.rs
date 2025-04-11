@@ -1,5 +1,6 @@
 use std::iter::{once, repeat};
 use itertools::Itertools;
+use rayon::prelude::*;
 use super::wrapper::{ComputationalField, TFelt};
 
 /// Computes polynomial coefficients from values in points 0, 1, 2, ..., n
@@ -208,7 +209,7 @@ pub fn eq_poly_sequence<F: TFelt>(pt: &[F]) -> Vec<Vec<F>> {
     EQPolyEvaluator::new().seq(pt)
 }
 
-pub fn eq_poly_sequence_last<F: TFelt>(pt: &[F]) -> Option<Vec<F>> {
+fn eq_poly_sequence_last<F: TFelt>(pt: &[F]) -> Option<Vec<F>> {
     EQPolyEvaluator::new().last(pt)
 }
 
@@ -217,9 +218,10 @@ pub fn eq_poly_sequence_from_multiplier_last<F: TFelt>(mul: F, pt: &[F]) -> Opti
 }
 
 // multivar poly
-pub fn evaluate_multivar<F: TFelt>(poly: &[F], pt: &[F]) -> F {
-    let e_p = eq_poly_sequence_last(&pt.to_vec()).unwrap();
-    poly.iter().zip_eq(e_p.iter()).map(|(&a, b)| a * b).fold(F::zero(), |x, y| x + y)
+pub fn evaluate_multivar<F: ComputationalField>(poly: &[F], pt: &[F]) -> F {
+    let e_p = eq_poly(pt);
+    poly.par_iter().zip(e_p.par_iter()).map(|(&a, b)| a * b).sum()
+    
 }
 
 pub fn evaluate_index_poly<F: TFelt>(pt: &[F]) -> F {
@@ -230,6 +232,12 @@ pub fn evaluate_index_poly<F: TFelt>(pt: &[F]) -> F {
         res
     }).fold(F::zero(), |x, y| x + y)
     
+}
+
+pub fn eq_poly<F: ComputationalField>(pt: &[F]) -> Vec<F> {
+    let mut pt = pt.to_vec();
+    pt.reverse();
+    eq_poly_sequence_last(&pt).unwrap()
 }
 
 #[cfg(test)]

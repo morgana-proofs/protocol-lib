@@ -83,11 +83,10 @@ mod tests {
     }
 
     #[test]
-    fn dense_sumcheck_with_eq_verifier_accepts_prover() {
+    fn dense_sumcheck_with_verifier_accepts_prover() {
         let rng = &mut test_rng();
         let logsize = 6;
         let polys : Vec<Vec<F>> = (0..2).map(|_| (0 .. 1 << logsize).map(|_|F::rand(rng)).collect()).collect();
-        let point : Vec<F> = (0..logsize).map(|_| F::rand(rng)).collect();
 
         let f = TestFunction{};
 
@@ -100,18 +99,13 @@ mod tests {
 
         let mut transcript_p = ManualTestTranscript::new((0..1000).map(|_| F::rand(rng)).collect_vec());
 
-        let ev_claims = SumClaim(output.iter().sum());
-
+        let claim = SumClaim(output.iter().sum());
         let sumcheck = DenseSumcheck::new(f, logsize);
-
-        let (output_claims, _) = sumcheck.prove::<DenseSumcheck<_,_,>>(&mut transcript_p, ev_claims.clone(), polys.clone());
-
-        let proof = transcript_p.end();
-
+        let (output_claims, _) = sumcheck.prove::<DenseSumcheck<_,_,>>(&mut transcript_p, claim.clone(), polys.clone());
+        let _proof = transcript_p.end();
         let mut transcript_v = transcript_p;
 
-        let expected_output_claims = sumcheck.verify(&mut transcript_v, ev_claims);
-
+        let expected_output_claims = sumcheck.verify(&mut transcript_v, claim);
         assert_eq!(output_claims, expected_output_claims);
 
         let SinglePointClaims { point : new_point, evs } = output_claims;

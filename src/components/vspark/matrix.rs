@@ -551,7 +551,7 @@ mod tests {
         let tbl = compute_tau_table(n, p, &r);
         let x = (0..6).map(|_| F::rand(rng)).collect_vec();
 
-        let prover_evaluation = evaluate_multivar(&tbl, &x.clone().into_iter().rev().collect_vec());
+        let prover_evaluation = evaluate_multivar(&tbl, &x.clone().into_iter().collect_vec());
         let verifier_evaluation = compute_tau_at_point(n, p, &x, &r);
         assert_eq!(prover_evaluation, verifier_evaluation);
     }

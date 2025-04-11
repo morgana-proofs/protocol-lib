@@ -5,7 +5,7 @@ use itertools::Itertools;
 use rayon::current_num_threads;
 use crate::common::algfn::{AlgFn, AlgFnSO};
 use crate::common::claims::{EvalClaim, SinglePointClaims, SumClaim};
-use crate::common::math::{bind_dense_poly, eq_poly_sequence_last, evaluate_univar, from_evals};
+use crate::common::math::{bind_dense_poly, eq_poly, evaluate_univar, from_evals};
 use crate::common::wrapper::{ComputationalField, TFelt};
 use crate::components::sumcheck::algfn_wrappers::{EqWrapper, GammaWrapper};
 use crate::components::sumcheck::generic::{SumcheckGenericProverImpl, SumcheckProtocol};
@@ -147,7 +147,7 @@ impl<F: ComputationalField, Fun: AlgFn<F>> FoldToSumcheckable<F> for DenseEqSumc
         let num_vars = self.point.len();
 
         let mut polys = self.polys;
-        let eq = eq_poly_sequence_last(&self.point).unwrap();
+        let eq = eq_poly(&self.point);
         polys.push(eq);
 
         Self::Target::new(

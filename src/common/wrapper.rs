@@ -1,5 +1,6 @@
 use std::fmt::Debug;
-use std::ops::{Add, Div, Mul, Neg, Sub};
+use std::iter::Sum;
+use std::ops::{Add, AddAssign, Div, DivAssign, Mul, MulAssign, Neg, Sub, SubAssign};
 
 use ark_ff::PrimeField;
 use ark_serialize::{CanonicalDeserialize, CanonicalSerialize};
@@ -32,11 +33,24 @@ pub trait TFelt:
     + Div<Self, Output = Self>
     + for<'a> Div<&'a Self, Output = Self>
     + for<'a> Div<&'a mut Self, Output = Self>
+    + AddAssign<Self>
+    + for<'a> AddAssign<&'a Self>
+    + for<'a> AddAssign<&'a mut Self>
+    + MulAssign<Self>
+    + for<'a> MulAssign<&'a Self>
+    + for<'a> MulAssign<&'a mut Self>
+    + SubAssign<Self>
+    + for<'a> SubAssign<&'a Self>
+    + for<'a> SubAssign<&'a mut Self>
+    + DivAssign<Self>
+    + for<'a> DivAssign<&'a Self>
+    + for<'a> DivAssign<&'a mut Self>
     + Neg<Output = Self>
     + Invert<Output = Self>
     + Double
     + Debug
     + TFeltUtil
+    + Sum
     {}
 
 impl<T: Clone
@@ -53,11 +67,24 @@ impl<T: Clone
     + Div<Self, Output = Self>
     + for<'a> Div<&'a Self, Output = Self>
     + for<'a> Div<&'a mut Self, Output = Self>
+    + AddAssign<Self>
+    + for<'a> AddAssign<&'a Self>
+    + for<'a> AddAssign<&'a mut Self>
+    + MulAssign<Self>
+    + for<'a> MulAssign<&'a Self>
+    + for<'a> MulAssign<&'a mut Self>
+    + SubAssign<Self>
+    + for<'a> SubAssign<&'a Self>
+    + for<'a> SubAssign<&'a mut Self>
+    + DivAssign<Self>
+    + for<'a> DivAssign<&'a Self>
+    + for<'a> DivAssign<&'a mut Self>
     + Neg<Output = Self>
     + Invert<Output = Self>
     + Double
     + Debug
     + TFeltUtil
+    + Sum
 > TFelt for T {}
 
 pub trait Double {

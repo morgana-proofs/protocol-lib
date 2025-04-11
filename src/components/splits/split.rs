@@ -129,8 +129,8 @@ impl<F: TFelt, Dialect: TArithmeticTranscript<F>> TProtocol<Dialect> for SplitAt
         let evs_new = evs_l.zip(evs_r).map(|(x, y)| x.clone() + r.clone() * (y.clone() - x.clone())).collect();
 
         point.insert(match self.var_idx {
-            SplitIdx::LO(x) => {point.len() - x}
-            SplitIdx::HI(x) => {x}
+            SplitIdx::HI(x) => {point.len() - x}
+            SplitIdx::LO(x) => {x}
         }, r);
 
         SinglePointClaims{ point, evs: evs_new }

@@ -4,7 +4,7 @@ use std::ops::Index;
 use itertools::Itertools;
 use crate::common::algfn::AlgFnSO;
 use crate::common::claims::{EvalClaim, SinglePointClaims, SumClaim};
-use crate::common::math::eq_poly_sequence_last;
+use crate::common::math::eq_poly;
 use crate::common::wrapper::{ComputationalField, TFelt};
 use crate::components::sumcheck::dense_eq::{eq_eval, DenseSumcheckableSO};
 use crate::components::sumcheck::generic::{SumcheckGenericProverImpl, SumcheckProtocol};
@@ -187,7 +187,7 @@ impl<F: ComputationalField, Transcript: TArithmeticTranscript<F>> TProverImpl<Tr
             polys.into_iter()
                 .map(|(point_idx, polys)| {
                     polys.into_iter()
-                        .chain(once(eq_poly_sequence_last(&points[point_idx]).unwrap()))
+                        .chain(once(eq_poly(&points[point_idx])))
                 })
                 .flatten()
                 .collect_vec(),

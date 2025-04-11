@@ -38,7 +38,7 @@ impl<F: TFelt, Fun: AlgFnSO<F>, Transcript: TArithmeticTranscript<F>> TProtocol<
             rs.push(r.clone());
             sum_claim = evaluate_univar(&poly, &r);
         }
-        rs.reverse();
+//        rs.reverse();
         EvalClaim{ev: sum_claim, point: rs}
     }
 }
@@ -66,7 +66,7 @@ impl<F: ComputationalField, Fun: AlgFnSO<F>, S: Sumcheckable<F>, Transcript: TAr
             sum_claim = evaluate_univar(&poly, &r);
             sumcheckable.bind(r);
         }
-        rs.reverse();
+//        rs.reverse();
         let final_evals = sumcheckable.final_evals();
         debug_assert!(protocol.f.exec(&final_evals) == sum_claim); // Final evals are passed as prover output for last round postprocess.
         (EvalClaim{ev: sum_claim, point: rs}, final_evals)
