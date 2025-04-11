@@ -59,11 +59,10 @@ impl<T: Clone, It: Iterator<Item=T>> Pad<T> for It {
 pub struct Vspark<F: TFelt> {
     d: usize,  // matrix number logsize
     h: usize,  // description logsize
-    n: usize,  // somehow needed for tau, must be sum of some other values here
+    nx: usize,  // aka x-logsize
     px: usize,
+    ny: usize,  // aka y-logsize
     py: usize,
-    x_logsize: usize,
-    y_logsize: usize,
     _pd: PhantomData<F>,
 }
 
@@ -118,13 +117,13 @@ impl<F: TFelt, Transcript: TArithmeticTranscript<F>> TProtocol<Transcript> for V
     fn verify(&self, ctx: &mut Transcript, claims: Self::ClaimsBefore) -> Self::ClaimsAfter {
         let EvalClaim { ev: e_ev_old, point: e_point_old } = claims;
         let (t, rs) = e_point_old.split_at(self.d);
-        let (r_x, rs) = rs.split_at(self.x_logsize);
-        let (r_y, rs) = rs.split_at(self.y_logsize);
+        let (r_x, rs) = rs.split_at(self.nx);
+        let (r_y, rs) = rs.split_at(self.ny);
         assert_eq!(rs.len(), 0);
 
         let lookup = Logup::new(vec![
-            LookupType::Indexed(self.x_logsize + 1, self.h + self.d),
-            LookupType::Indexed(self.y_logsize + 1, self.h + self.d),
+            LookupType::Indexed(self.nx + 1, self.h + self.d),
+            LookupType::Indexed(self.ny + 1, self.h + self.d),
             LookupType::Indexed(self.d, self.h + self.d),
         ]);
 
@@ -141,8 +140,8 @@ impl<F: TFelt, Transcript: TArithmeticTranscript<F>> TProtocol<Transcript> for V
         let IndexedLookupClaim{ accesses: y_acc, table: tau_y_claim, values: y_pull, indexes: y_claim } = b;
         let IndexedLookupClaim{ accesses: i_acc, table: e_claim_lookup, values: i_pull, indexes: i_claim } = c;
 
-        (tau_x_claim.ev - Self::compute_tau(self.n, self.px, &tau_x_claim.point, r_x)).require();
-        (tau_y_claim.ev - Self::compute_tau(self.n, self.py, &tau_y_claim.point, r_y)).require();
+        (tau_x_claim.ev - Self::compute_tau(self.nx, self.px, &tau_x_claim.point, r_x)).require();
+        (tau_y_claim.ev - Self::compute_tau(self.ny, self.py, &tau_y_claim.point, r_y)).require();
 
         let gamma = (0..self.d).map(|_| ctx.challenge()).collect_vec();
 
@@ -227,24 +226,24 @@ impl<F: ComputationalField, Transcript: TArithmeticTranscript<F>> TProverImpl<Tr
         let VsparkProverInput{ e_poly, c_poly, i_poly, x_poly, y_poly, _pd } = advice;
         let EvalClaim { ev: e_ev_old, point: e_point_old } = claims;
         let (t, rs) = e_point_old.split_at(protocol.d);
-        let (r_x, rs) = rs.split_at(protocol.x_logsize);
-        let (r_y, rs) = rs.split_at(protocol.y_logsize);
+        let (r_x, rs) = rs.split_at(protocol.nx);
+        let (r_y, rs) = rs.split_at(protocol.ny);
         assert_eq!(rs.len(), 0);
 
         let lookup = Logup::new(vec![
-            LookupType::Indexed(protocol.x_logsize + 1, protocol.h + protocol.d),
-            LookupType::Indexed(protocol.y_logsize + 1, protocol.h + protocol.d),
+            LookupType::Indexed(protocol.nx + 1, protocol.h + protocol.d),
+            LookupType::Indexed(protocol.ny + 1, protocol.h + protocol.d),
             LookupType::Indexed(protocol.d, protocol.h + protocol.d),
         ]);
 
-        let tau_table_x = compute_tau_table(protocol.n, protocol.px, r_x);
+        let tau_table_x = compute_tau_table(protocol.nx, protocol.px, r_x);
         let mut tau_accesses_x = tau_table_x.iter().map(|_| F::zero()).collect::<Vec<_>>();
         let tau_values_x = x_poly.iter().map(|idx| {
             tau_accesses_x[*idx] = tau_accesses_x[*idx] + F::one();
             tau_table_x[*idx]
         }).collect::<Vec<_>>();
 
-        let tau_table_y = compute_tau_table(protocol.n, protocol.py, r_y);
+        let tau_table_y = compute_tau_table(protocol.ny, protocol.py, r_y);
         let mut tau_accesses_y = tau_table_x.iter().map(|_| F::zero()).collect::<Vec<_>>();
         let tau_values_y = y_poly.iter().map(|idx| {
             tau_accesses_y[*idx] = tau_accesses_y[*idx] + F::one();
@@ -296,8 +295,8 @@ impl<F: ComputationalField, Transcript: TArithmeticTranscript<F>> TProverImpl<Tr
         let IndexedLookupClaim{ accesses: y_acc, table: tau_y_claim, values: y_pull, indexes: y_claim } = b;
         let IndexedLookupClaim{ accesses: i_acc, table: e_claim_lookup, values: i_pull, indexes: i_claim } = c;
 
-        (tau_x_claim.ev - Self::compute_tau(protocol.n, protocol.px, &tau_x_claim.point, r_x)).require();
-        (tau_y_claim.ev - Self::compute_tau(protocol.n, protocol.py, &tau_y_claim.point, r_y)).require();
+        (tau_x_claim.ev - Self::compute_tau(protocol.nx, protocol.px, &tau_x_claim.point, r_x)).require();
+        (tau_y_claim.ev - Self::compute_tau(protocol.ny, protocol.py, &tau_y_claim.point, r_y)).require();
 
         let gamma = (0..protocol.d).map(|_| ctx.challenge()).collect_vec();
 
@@ -413,8 +412,4 @@ mod tests {
         )
     }
     
-    #[test]
-    fn test_vspark_verifier_accepts_prover() {
-        
-    }
 }

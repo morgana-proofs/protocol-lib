@@ -2,7 +2,8 @@ use std::fmt::{Display, Formatter};
 use std::iter::once;
 use std::ops::BitXor;
 use ark_std::iterable::Iterable;
-use ark_std::log2;
+use ark_std::{log2, UniformRand};
+use ark_std::rand::{Rng, RngCore};
 use itertools::Itertools;
 use crate::common::wrapper::{ComputationalField, TFelt};
 use crate::components::sumcheck::dense_eq::eq_eval;
@@ -13,7 +14,6 @@ pub struct AdmSubset {
     a: usize,  // page offset
     k: usize,  // log(number of full pages)
     u: usize,  // in-page offset
-    l: usize,  // length
 }
 
 #[derive(Debug, Default, Copy, Clone)]
@@ -22,32 +22,31 @@ pub struct _AdmSubset {
     a: usize,
     k: usize,
     u: usize,
-    l: usize,
 }
 
 macro_rules! AdmSubset {
     {$($field:ident: $value:expr),* $(,)?} => {
         {
-        let $crate::components::vspark::matrix::_AdmSubset{p, a, k, u, l} = $crate::components::vspark::matrix::_AdmSubset {
+        let $crate::components::vspark::matrix::_AdmSubset{p, a, k, u} = $crate::components::vspark::matrix::_AdmSubset {
             $(
                 $field: $value,
             )*
             ..Default::default()
         };
-        $crate::components::vspark::matrix::AdmSubset::new(p, a, k, u, l)
+        $crate::components::vspark::matrix::AdmSubset::new(p, a, k, u)
         }
     }
 }
 
 impl AdmSubset {
-    pub fn new_unchecked(p: usize, a: usize, k: usize, u: usize, l: usize) -> Self {
-        Self {p, a, k, u, l}
+    pub fn new_unchecked(p: usize, a: usize, k: usize, u: usize) -> Self {
+        Self {p, a, k, u}
     }
-    pub fn new(p: usize, a: usize, k: usize, u: usize, l: usize) -> Self {
+    pub fn new(p: usize, a: usize, k: usize, u: usize) -> Self {
         assert!(
-            (u == 0) && (l == (1 << (k + p))) || (u + l <= (1 << p)) && (k == 0)
+            (u == 0) || (k == 0)
         );
-        Self::new_unchecked(p, a, k, u, l)
+        Self::new_unchecked(p, a, k, u)
     }
 
     pub fn starting_at(p: usize, start: usize, len: usize) -> Self {
@@ -65,7 +64,6 @@ impl AdmSubset {
             a,
             k,
             u,
-            len,
         )
     }
 
@@ -75,28 +73,22 @@ impl AdmSubset {
             a: 0,
             k: (log2(l.length()) as usize) - p,
             u: 0,
-            l: l.length(),
         }
     }
 
-    pub fn bounds(&self) -> Result<(usize, usize), String> {
-        let Self{p, a, k, u, l} = self;
-        if (*u == 0) && (*l == (1 << (k + p))) {
-            Ok((a * (1 << (k + p)), (a + 1) * (1 << (k + p))))
-        } else if (u + l <= (1 << p)) && (*k == 0) {
-            Ok((a * (1usize << p) + u, a * (1usize << p) + u + l))
+    pub fn start(&self) -> Result<usize, String> {
+        let Self{p, a, k, u} = self;
+        if (*u == 0) {
+            Ok(a * (1 << (k + p)))
+        } else if (*k == 0) {
+            Ok(a * (1usize << p) + u)
         } else {
             Err("Unsound data".to_string())
         }
     }
 
-    pub fn length(&self) -> Result<usize, String> {
-        let bounds = self.bounds()?;
-        Ok(bounds.1 - bounds.0)
-    }
-
     fn encode(&self) -> usize {
-        let Self{p, a, u, k, l } = self; // l is not needed
+        let Self{p, a, u, k} = self; // l is not needed
 
         (2 * ((1usize << p) * a + u) + 1) * (1usize << k)
     }
@@ -120,7 +112,6 @@ impl AdmSubset {
                 a,
                 k,
                 u,
-                l: 0,
             })
         }
     }
@@ -189,7 +180,7 @@ pub fn compute_tau_at_point<F: TFelt>(n: usize, p: usize, x: &[F], r: &[F]) -> F
 
 impl Display for AdmSubset{
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        f.write_fmt(format_args!("AdmSubset<{}>(a: {}, k: {}, u: {}, l: {})", self.p, self.a, self.k, self.u, self.l))
+        f.write_fmt(format_args!("AdmSubset<{}>(a: {}, k: {}, u: {})", self.p, self.a, self.k, self.u))
     }
 }
 
@@ -207,16 +198,23 @@ impl AdmLen {
     pub fn length(&self) -> usize {
         self.l
     }
+
+    pub fn can_start_at(&self, pos: usize) -> bool {
+        match self.l < 1 << self.p {
+            true => {
+                pos >> self.p + self.l < (1 << self.p)
+            }
+            false => {
+                pos % self.l == 0
+            }
+        }
+    }
 }
 
 impl Display for AdmLen {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         f.write_fmt(format_args!("AdmLen<{}>({})", self.p, self.l))
     }
-}
-
-pub fn belongs(subset: &AdmSubset, set: AdmLen) -> bool {
-    subset.bounds().unwrap().1 < set.l
 }
 
 #[derive(Debug, Default)]
@@ -273,10 +271,17 @@ impl <F: TFelt> VsparkMatrixGroup<F> {
         for (i, matrix) in self.m.iter().enumerate() {
             for (subm_idx, subm) in self.m[i].submatrices.iter().enumerate() {
                 assert!(subm.id < i, "Invalid submatrix reference; matrix: {}, submatrix loc {}, ref {}", i, subm_idx, subm.id);
-                assert!(subm.x.bounds().is_ok(), "Invalid submatrix x region; matrix: {}, submatrix loc {}, subset: {:?}", i, subm_idx, subm.x);
-                assert!(subm.y.bounds().is_ok(), "Invalid submatrix y region; matrix: {}, submatrix loc {}, subset: {:?}", i, subm_idx, subm.y);
-                assert!(subm.x.l == self.m[subm.id].x.length());
-                assert!(subm.y.l == self.m[subm.id].y.length());
+                let subm_descr = &self.m[subm.id];
+                let subm_x_start = subm.x.start();
+                assert!(subm_x_start.is_ok(), "Invalid submatrix x region; matrix: {}, submatrix loc {}, subset: {:?}", i, subm_idx, subm.x);
+                let subm_x_start = subm_x_start.unwrap();
+                assert!(subm_descr.x.can_start_at(subm_x_start), "Invalid submatrix x start; matrix: {}, submatrix loc {}, subset: {:?}", i, subm_idx, subm.x);
+                assert!(matrix.x.l >= subm_x_start + subm_descr.x.l);
+
+
+                assert!(subm.y.start().is_ok(), "Invalid submatrix y region; matrix: {}, submatrix loc {}, subset: {:?}", i, subm_idx, subm.y);
+                assert!(subm_descr.y.can_start_at(subm.y.start().unwrap()), "Invalid submatrix y start; matrix: {}, submatrix loc {}, subset: {:?}", i, subm_idx, subm.x);
+                assert!(matrix.y.l >= subm_descr.y.l);
             }
         }
         true
@@ -298,10 +303,10 @@ impl <F: TFelt> VsparkMatrixGroup<F> {
         let mut res = vec![vec![F::zero(); matrix.x.length()]; matrix.y.length()];
         matrix.submatrices.iter().enumerate().for_each(|(_id, submat)| {
             let d = self.as_rowwise_dense(submat.id);
-            let (xl, xr) = submat.x.bounds().unwrap();
-            let (yl, yr) = submat.y.bounds().unwrap();
-            for (sr, r) in (yl..yr).enumerate() {
-                for (sc, c) in (xl..xr).enumerate() {
+            let xl = submat.x.start().unwrap();
+            let yl = submat.y.start().unwrap();
+            for (sr, r) in (yl..yl + d.len()).enumerate() {
+                for (sc, c) in (xl..xl + d[0].len()).enumerate() {
                     res[r][c] = res[r][c] + d[sr][sc] * submat.coeff;
                 }
             }
@@ -338,14 +343,12 @@ impl <F: TFelt> VsparkMatrixGroup<F> {
                         a: 0,
                         k: 0,
                         u: 0,
-                        l: matrix.x.length(),
                     },
                     y: AdmSubset!{
                         p: matrix.py,
                         a: 0,
                         k: 0,
                         u: 0,
-                        l: matrix.y.length(),
                     },
                 });
                 result.push(addition);
@@ -354,6 +357,101 @@ impl <F: TFelt> VsparkMatrixGroup<F> {
             result.push(matrix);
         }
         result
+    }
+}
+
+impl AdmLen {
+    pub fn rand<RNG: Rng>(rng: &mut RNG, n: usize, p: usize) -> Self {
+        let number_of_partial_subset_lens = 1 << p;
+        let total_number_of_subset_lens = number_of_partial_subset_lens + n + 1 - p;
+        let subset_idx = rng.next_u64() as usize % total_number_of_subset_lens;
+        match subset_idx < number_of_partial_subset_lens {
+            true => {
+                Self {
+                    p,
+                    l: subset_idx,
+                }
+            }
+            false => {
+                Self {
+                    p,
+                    l: 1 << (p + (subset_idx - number_of_partial_subset_lens)),
+                }
+            }
+        }
+    }
+}
+
+impl AdmSubset {
+    pub fn rand<RNG: Rng>(rng: &mut RNG, parent: AdmLen, len: AdmLen) -> Self {
+        let AdmLen { p, l } = len;
+
+        match len.l >= 1 << p {
+            true => {  // full
+                let n = parent.l.trailing_zeros() as usize;
+                let k = (l >> p).trailing_zeros() as usize;
+                let a = rng.next_u64() as usize % (1 << (n - k - p));
+                Self {
+                    p,
+                    a,
+                    k,
+                    u: 0,
+                }
+            }
+            false => {  // partial
+                let a = 0;
+                let u = rng.next_u64() as usize % (parent.l + 1 - l);
+                Self {
+                    p,
+                    a,
+                    k: 0,
+                    u,
+                }
+            }
+        }
+    }
+}
+
+impl <F: TFelt + UniformRand> VsparkMatrixGroup<F> {
+    pub fn rand<RNG: Rng>(rng: &mut RNG, nx: usize, px: usize, ny: usize, py: usize, h: usize, d: usize) -> Self {
+        let mut res = Self::trivial(px, py);
+        let additional_count = rng.next_u64() as usize % (1 << d);
+        for _ in 0..additional_count {
+            let mut m = VsparkMatrix::<F> {
+                px,
+                x: AdmLen::rand(rng, nx, px),
+                py,
+                y: AdmLen::rand(rng, ny, py),
+                submatrices: vec![],
+            };
+            if m.x.l == 0 || m.y.l == 0 {
+                break;
+            }
+
+            let n_recur = rng.next_u64() as usize % (1 << h) + 1;
+            for _ in 0..n_recur {
+                let mut retry_times = 10;
+                let r_idx = loop {
+                    let r_idx = rng.next_u64() as usize % res.len();
+                    if res.m[r_idx].x.l < m.x.l && res.m[r_idx].y.l < m.y.l {
+                        break r_idx;
+                    }
+                    retry_times -= 1;
+                    if retry_times == 0 {
+                        break 0;
+                    }
+                };
+                let r = VsparkRecDescr::new(
+                    r_idx,
+                    F::rand(rng),
+                    AdmSubset::rand(rng, m.x, res.m[r_idx].x),
+                    AdmSubset::rand(rng, m.y, res.m[r_idx].y),
+                );
+                m.submatrices.push(r)
+            }
+            res.push(m);
+        }
+        res
     }
 }
 
@@ -496,6 +594,29 @@ mod tests {
         let dense_sliced = sliced.as_rowwise_dense(sliced.len() - 1);
         assert_eq!(dense_sliced, dense);
     }
+
+
+    #[test]
+    fn test_slicing_rand_matrix() {
+        let rng = &mut test_rng();
+        rng.next_u64();
+        let grp = VsparkMatrixGroup::<F>::rand(
+            rng,
+            6,
+            3,
+            6,
+            3,
+            4,
+            4,
+        );
+        assert!(grp.valid());
+        let dense = grp.as_rowwise_dense(grp.len() - 1);
+        let sliced = grp.slice(2);
+        assert!(sliced.valid());
+        let dense_sliced = sliced.as_rowwise_dense(sliced.len() - 1);
+        assert_eq!(dense_sliced, dense);
+    }
+
 
     #[test]
     fn test_encodings() {
