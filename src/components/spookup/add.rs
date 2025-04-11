@@ -149,7 +149,7 @@ mod tests {
     use ark_std::{rand::RngCore, test_rng};
     use itertools::Itertools;
 
-    use crate::{common::{math::{eq_poly_sequence_last, evaluate_multivar}, wrapper::TFeltUtil}, components::spookup::{add::evaluate_add_base_case, spookup::SpookupOp}, protocol::component::TProtocol, transcript::transcript::tests::ManualTestTranscript};
+    use crate::{common::{math::{eq_poly, evaluate_multivar}, wrapper::TFeltUtil}, components::spookup::{add::evaluate_add_base_case, spookup::SpookupOp}, protocol::component::TProtocol, transcript::transcript::tests::ManualTestTranscript};
     use super::{evaluate_add_inductive_step, SpookupAdd};
 
     #[test]
@@ -249,8 +249,8 @@ mod tests {
 
         let prover_table = adder.prover_evaluate_at_output(&pt_out);
 
-        let a = eq_poly_sequence_last(&pt_in).unwrap();
-        let b = eq_poly_sequence_last(&pt_out).unwrap();
+        let a = eq_poly(&pt_in);
+        let b = eq_poly(&pt_out);
 
         let mut acc = F::zero();
         for n in 0u32 .. 1 << adder.n_bits_in() {

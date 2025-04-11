@@ -2,7 +2,7 @@ use std::marker::PhantomData;
 
 use rayon::prelude::*;
 
-use crate::{common::{algfn::AlgFnSO, claims::{EvalClaim, SinglePointClaims, SumClaim}, math::eq_poly_sequence_last, wrapper::{ComputationalField, TFelt, TFeltUtil}}, components::sumcheck::{dense::DenseSumcheck, dense_eq::eq_eval}, protocol::component::{TProtocol, TProverImpl}, transcript::transcript::TArithmeticTranscript};
+use crate::{common::{algfn::AlgFnSO, claims::{EvalClaim, SinglePointClaims, SumClaim}, math::eq_poly, wrapper::{ComputationalField, TFelt, TFeltUtil}}, components::sumcheck::{dense::DenseSumcheck, dense_eq::eq_eval}, protocol::component::{TProtocol, TProverImpl}, transcript::transcript::TArithmeticTranscript};
 
 /// This structure represents an array of bit chunks. We maintain a collection of these arrays.
 #[derive(Clone, Debug)]
@@ -33,7 +33,7 @@ pub trait SpookupOp : Clone + Copy + Send + Sync {
     /// where A(x, y) is a multilinear extension of matrix A.
     fn prover_evaluate_at_output(&self, pt: &[Self::F]) -> Vec<Self::F> where Self::F: ComputationalField {
         assert!(pt.len() == self.n_bits_out());
-        let eq_poly = eq_poly_sequence_last(pt).unwrap(); // WE NEED NORMAL EQ BRO
+        let eq_poly = eq_poly(pt); // WE NEED NORMAL EQ BRO
         (0 .. 1 << self.n_bits_in()).into_par_iter().map(|i| {
             eq_poly[self.apply(i) as usize]
         }).collect()
