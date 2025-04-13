@@ -1,7 +1,10 @@
-use std::iter::{once, repeat};
+use std::{cmp::{max, min}, iter::{once, repeat}};
+use ark_std::log2;
 use itertools::Itertools;
 use rayon::prelude::*;
-use super::wrapper::{ComputationalField, TFelt};
+use crate::field::f128_polyval::utils::log2_exact;
+
+use super::{ptr_utils::{AsSharedMUMutPtr, UninitArr, UnsafeIndexRaw, UnsafeIndexRawMut}, wrapper::{ComputationalField, TFelt}};
 
 /// Computes polynomial coefficients from values in points 0, 1, 2, ..., n
 pub fn from_evals<F: ComputationalField>(evals: &[F]) -> Vec<F> {
@@ -234,11 +237,54 @@ pub fn evaluate_index_poly<F: TFelt>(pt: &[F]) -> F {
     
 }
 
+// pub fn eq_poly_<F: ComputationalField>(pt: &[F]) -> Vec<F> {
+//     let mut pt = pt.to_vec();
+//     pt.reverse();
+//     eq_poly_sequence_last(&pt).unwrap()
+// }
+
 pub fn eq_poly<F: ComputationalField>(pt: &[F]) -> Vec<F> {
-    let mut pt = pt.to_vec();
-    pt.reverse();
-    eq_poly_sequence_last(&pt).unwrap()
+    let l = pt.len();
+    let mut ret = UninitArr::new(1 << l);
+    let ptr = ret.as_shared_mut_ptr();
+    unsafe{
+        *ptr.get_mut(0) = F::one();
+        for i in 0..l {
+            let half = 1 << i;
+
+            #[cfg(not(feature = "parallel"))]
+            for j in 0..half {
+                *ptr.get_mut(j + half) = pt[i] * *ptr.get(j);
+                *ptr.get_mut(j) -= *ptr.get(j + half);
+            };
+
+            #[cfg(feature = "parallel")]
+            {
+                let num_threads = rayon::current_num_threads();
+                if i <= 17 { // value found experimentally, might differ on other devices; maybe later we can set this up in some automatic way?
+                    for j in 0..half {
+                        *ptr.get_mut(j + half) = pt[i] * *ptr.get(j);
+                        *ptr.get_mut(j) -= *ptr.get(j + half);
+                    };    
+                } else {
+                    let task_size = (half + num_threads - 1) / num_threads;        
+                    rayon::scope(|s| {
+                        for task in 0..num_threads {
+                            s.spawn(move |_| {
+                                for j in task * task_size .. min((task + 1) * task_size, half) {
+                                    *ptr.get_mut(j + half) = pt[i] * *ptr.get(j);
+                                    *ptr.get_mut(j) -= *ptr.get(j + half);
+                                }
+                            });
+                        }
+                    });
+                }
+            }
+        }
+    ret.assume_init()
+    }
 }
+
 
 #[cfg(test)]
 mod tests {

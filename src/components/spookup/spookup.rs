@@ -1,18 +1,19 @@
 use std::marker::PhantomData;
 
+use ark_std::{rand::RngCore, test_rng};
+use itertools::Itertools;
 use rayon::prelude::*;
 
-use crate::{common::{algfn::AlgFnSO, claims::{EvalClaim, SinglePointClaims, SumClaim}, math::eq_poly, wrapper::{ComputationalField, TFelt, TFeltUtil}}, components::sumcheck::{dense::DenseSumcheck, dense_eq::eq_eval}, protocol::component::{TProtocol, TProverImpl}, transcript::transcript::TArithmeticTranscript};
+use crate::{
+    common::{algfn::AlgFnSO, claims::{EvalClaim, SumClaim},
+    math::{eq_poly, evaluate_multivar},
+    wrapper::{ComputationalField, TFelt, TFeltUtil}},
+    components::sumcheck::dense::DenseSumcheck,
+    protocol::component::{TProtocol, TProverImpl},
+    transcript::transcript::TArithmeticTranscript
+};
 
-/// This structure represents an array of bit chunks. We maintain a collection of these arrays.
-#[derive(Clone, Debug)]
-pub struct ChunkValuedArr {
-    /// Bit size of the chunk. From 1 to 8.
-    pub bitsize: usize,
-    pub data: Vec<u8>,
-}
-
-pub trait SpookupOp : Clone + Copy + Send + Sync {
+pub trait MatrixOp : Send + Sync {
     type F: TFelt;
     
     fn n_bits_in(&self) -> usize;
@@ -33,7 +34,7 @@ pub trait SpookupOp : Clone + Copy + Send + Sync {
     /// where A(x, y) is a multilinear extension of matrix A.
     fn prover_evaluate_at_output(&self, pt: &[Self::F]) -> Vec<Self::F> where Self::F: ComputationalField {
         assert!(pt.len() == self.n_bits_out());
-        let eq_poly = eq_poly(pt); // WE NEED NORMAL EQ BRO
+        let eq_poly = eq_poly(pt);
         (0 .. 1 << self.n_bits_in()).into_par_iter().map(|i| {
             eq_poly[self.apply(i) as usize]
         }).collect()
@@ -66,7 +67,7 @@ impl<F: TFelt> MulFn<F> {
 }
 
 // De facto, this is just an application of a matrix: sum_x P(x) * L(x, r)
-impl<Op: SpookupOp, Transcript: TArithmeticTranscript<Op::F>> TProtocol<Transcript> for Op {
+impl<Op: MatrixOp, Transcript: TArithmeticTranscript<Op::F>> TProtocol<Transcript> for Op {
     type ClaimsBefore = EvalClaim<Op::F>;
 
     type ClaimsAfter = EvalClaim<Op::F>;
@@ -83,7 +84,7 @@ impl<Op: SpookupOp, Transcript: TArithmeticTranscript<Op::F>> TProtocol<Transcri
     }
 }
 
-impl<Op: SpookupOp, Transcript: TArithmeticTranscript<Op::F>> TProverImpl<Transcript> for Op where Op::F : ComputationalField {
+impl<Op: MatrixOp, Transcript: TArithmeticTranscript<Op::F>> TProverImpl<Transcript> for Op where Op::F : ComputationalField {
     type Verifier = Self;
 
     type ProverInput = Vec<Op::F>;
@@ -100,5 +101,49 @@ impl<Op: SpookupOp, Transcript: TArithmeticTranscript<Op::F>> TProverImpl<Transc
         
         let (claim_to_parse, ()) = sumcheck.prove::<DenseSumcheck<_, _>>(transcript, sum_claim, advice);
         (EvalClaim {point: claim_to_parse.point, ev: claim_to_parse.evs[0]}, ())
+    }
+}
+
+#[cfg(test)]
+pub mod tests {
+    use crate::transcript::transcript::tests::ManualTestTranscript;
+    use super::*;
+    
+    pub fn test_spookup_verifier_accepts_prover<F: ComputationalField, Op: MatrixOp<F = F>>(op: Op) {
+        let dormant_dim = 8;
+        // let n_bits = 7;
+
+        let rng = &mut test_rng();
+        let pt_out = (0..op.n_bits_out()).map(|_| {F::rand(rng)}).collect_vec();
+        let pt_dorm = (0..dormant_dim).map(|_| {F::rand(rng)}).collect_vec();
+
+        let mut transcript = ManualTestTranscript::new((0..1000).map(|_|F::rand(rng)).collect());
+
+        let inputs = (0 .. 1 << dormant_dim).map(|_| rng.next_u32() % (op.n_bits_in() as u32)).collect_vec(); //inputs are triples a, b, carry bit. outputs are a+b+carry, and output carry
+        let outputs = inputs.iter().map(|&x| op.apply(x)).collect_vec();
+
+        let eq_out = eq_poly(&pt_out);
+        let output_evals_dorm = outputs.iter().map(|&x| eq_out[x as usize]).collect_vec();
+
+        let claims = EvalClaim{ ev: evaluate_multivar(&output_evals_dorm, &pt_dorm), point: pt_out.clone() };
+        
+        let eq_dorm = eq_poly(&pt_dorm);
+        let mut advice = vec![F::zero(); 1 << op.n_bits_in()];
+        inputs.iter().enumerate().map(|(i, &x)| advice[x as usize] += eq_dorm[i]).count(); // pushforward
+
+        let (eval_claim, ()) = op.prove::<Op>(&mut transcript, claims.clone(), advice);
+
+        let _proof = transcript.end();
+
+        let eval_claim_2 = op.verify(&mut transcript, claims);
+
+        assert!(eval_claim == eval_claim_2);
+        let pt_in = eval_claim.point;
+        let eq_in = eq_poly(&pt_in);
+
+        let mut expected_eval = F::zero();
+        inputs.iter().enumerate().map(|(i, &x)| expected_eval += eq_dorm[i] * eq_in[x as usize]).count();
+
+        assert!(eval_claim.ev == expected_eval);
     }
 }

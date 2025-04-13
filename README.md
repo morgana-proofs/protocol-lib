@@ -1,3 +1,6 @@
-A rewrite of protocol API from GKR-MSM, with verifier IR features.
+Library for various things involving sumchecks; by Lev Soukhanov and Yar Rebenko, [[alloc]init].
 
-Eventually, plan is to prototype various reference implementations for V-SPARK / GKR stuff here.
+currently WIP:
+
+* V-SPARK protocol - a main ingerdient of Morgana VM
+* Spookup - sparse lookup that can be used for accelerated hashes

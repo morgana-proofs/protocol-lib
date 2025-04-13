@@ -19,6 +19,8 @@ merlin = {version = "3.0.0"}
 num-traits = {version = "0.2.19"}
 zeroize = "1.8.1"
 sha2 = "0.10.8"
+bytemuck = {version = "1.22.0", features = ["extern_crate_alloc", "derive", "zeroable_maybe_uninit"]}
+cfg-if = "1.0.0"
 
 [profile.rel-with-debinfo]
 inherits = "release"
@@ -27,5 +29,5 @@ debug = true
 [features]
 parallel = []
 default = [
-#    "parallel"
+    "parallel"
 ]

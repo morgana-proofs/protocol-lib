@@ -1,8 +1,6 @@
 use std::marker::PhantomData;
-
 use crate::common::wrapper::TFelt;
-
-use super::spookup::SpookupOp;
+use super::spookup::MatrixOp;
 
 #[derive(Debug, Clone, Copy)]
 pub struct SpookupAdd<F: TFelt> {
@@ -109,7 +107,7 @@ fn evaluate_add<F: TFelt>(x: &[F], y: &[F], z: &[F], carry_out: F) -> [F; 2] {
 
 }
 
-impl<F: TFelt> SpookupOp for SpookupAdd<F> {
+impl<F: TFelt> MatrixOp for SpookupAdd<F> {
     type F = F;
 
     fn n_bits_in(&self) -> usize {
@@ -146,10 +144,10 @@ mod tests {
 
     use ark_bn254::Fq as F;
     use ark_ff::UniformRand;
-    use ark_std::{rand::RngCore, test_rng};
+    use ark_std::test_rng;
     use itertools::Itertools;
 
-    use crate::{common::{math::{eq_poly, evaluate_multivar}, wrapper::TFeltUtil}, components::spookup::{add::evaluate_add_base_case, spookup::SpookupOp}, protocol::component::TProtocol, transcript::transcript::tests::ManualTestTranscript};
+    use crate::{common::{math::{eq_poly, evaluate_multivar}, wrapper::TFeltUtil}, components::spookup::{add::evaluate_add_base_case, spookup::{tests::test_spookup_verifier_accepts_prover, MatrixOp}}, field::f128_polyval::field::F128, protocol::component::TProtocol, transcript::transcript::tests::ManualTestTranscript};
     use super::{evaluate_add_inductive_step, SpookupAdd};
 
     #[test]
@@ -176,7 +174,7 @@ mod tests {
 
         for inc in 0..2 {
             for out in 0..2 {
-                let ev_table: Vec<F> = (0..8).map(|s| ((s >> 2) & 1, (s >> 1) & 1, (s >> 0) & 1)).map(|(x, y, z)| (((x + y + inc) % 2 == z) && ((x + y + inc) >> 1 == out)) as u64).map(|x| x.into()).collect_vec();
+                let ev_table: Vec<F> = (0..8).map(|s| ((s >> 0) & 1, (s >> 1) & 1, (s >> 2) & 1)).map(|(x, y, z)| (((x + y + inc) % 2 == z) && ((x + y + inc) >> 1 == out)) as u64).map(|x| x.into()).collect_vec();
 
                 assert!(evaluate_multivar(&ev_table, &pt) == rhs[inc * 2 + out]);
             }
@@ -207,7 +205,7 @@ mod tests {
         let rhs = evaluate_add_base_case(pt[0], pt[1], pt[2], pt[3]);
 
         for inc in 0..2 {
-                let ev_table: Vec<F> = (0..16).map(|s| ((s >> 3) & 1, (s >> 2) & 1, (s >> 1) & 1, (s >> 0) & 1)).map(|(x, y, z, carry_out)| (((x + y + inc) % 2 == z) && ((x + y + inc) >> 1 == carry_out)) as u64).map(|x| x.into()).collect_vec();
+                let ev_table: Vec<F> = (0..16).map(|s| ((s >> 0) & 1, (s >> 1) & 1, (s >> 2) & 1, (s >> 3) & 1)).map(|(x, y, z, carry_out)| (((x + y + inc) % 2 == z) && ((x + y + inc) >> 1 == carry_out)) as u64).map(|x| x.into()).collect_vec();
                 assert!(evaluate_multivar(&ev_table, &pt) ==  rhs[inc]);
             }
         }
@@ -222,8 +220,7 @@ mod tests {
         let adder = SpookupAdd::<F>::new(bitsize);
 
         fn as_point(x: u32, l: usize) -> Vec<F> {
-            let mut tmp : Vec<F> = (0..l).map(|j| ((x >> j) % 2).into()).collect();
-            tmp.reverse();
+            let tmp : Vec<F> = (0..l).map(|j| ((x >> j) % 2)).map(|x| if x == 1 {F::one()} else {F::zero()}).collect();
             tmp
         }
 
@@ -259,12 +256,7 @@ mod tests {
             acc += a[n] * b[m]
         }
 
-
-        println!("Verifier gives: {}", adder.verifier_evaluate(&pt_in, &pt_out));
-        println!("Prover gives: {}", evaluate_multivar(&prover_table, &pt_in));
-        println!("Naive eval: {}", acc);
-
-//        assert!(adder.verifier_evaluate(&pt_in, &pt_out) == evaluate_multivar(&prover_table, &pt_in));
+        assert!(adder.verifier_evaluate(&pt_in, &pt_out) == evaluate_multivar(&prover_table, &pt_in));
 
     }
 
@@ -272,20 +264,7 @@ mod tests {
     fn add_spookup_verifier_accepts_prover() {
         let n_bits = 7;
         let spooky_add = SpookupAdd::<F>::new(n_bits);
-        let rng = &mut test_rng();
-        let pt_out = (0..n_bits).map(|_| {F::rand(rng)}).collect_vec();
-
-        let transcript = ManualTestTranscript::new((0..1000).map(|_|F::rand(rng)).collect());
-
-        let inputs = (0..100000).map(|_| rng.next_u32() % (spooky_add.n_bits_in() as u32)).collect_vec(); //inputs are triples a, b, carry bit. outputs are a+b+carry, and output carry
-        let outputs = inputs.iter().map(|&x| spooky_add.apply(x)).collect_vec();
-
-
-        todo!();
-        //spooky_add.prove(&mut transcript, claims, advice);
-
+        test_spookup_verifier_accepts_prover(spooky_add);
     }
-
-
 
 }

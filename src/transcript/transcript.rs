@@ -59,7 +59,6 @@ pub trait TArithmeticTranscript<F: TFelt> : TTranscriptInterface + TTranscriptSu
 
 // impl<F: TPrimeField, Dialect: TFormalArithmeticDialect<F>> TArithmeticDialect<Sig<F, Dialect>> for Dialect {}
 
-
 #[cfg(test)]
 pub mod tests {
     use super::*;
