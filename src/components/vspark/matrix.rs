@@ -414,12 +414,18 @@ impl <F: ComputationalField> VsparkMatrixGroup<F> {
     pub fn tests_to_e_poly(&self, nx: usize, px: usize, rx: &[F], ny: usize, py: usize, ry: &[F]) -> Vec<F> {
         assert_r_size(nx, px, rx);
         assert_r_size(ny, py, ry);
-        let evx = hybrid_evals(px, rx);
-        let evy = hybrid_evals(py, ry);
 
         (0..self.m.len()).map(|i| {
+            let lx = log2(self.m[i].x.l) as usize;
+            let ly = log2(self.m[i].y.l) as usize;
+            let rx_ = &rx[..lx];
+            let ry_ = &ry[..ly];
+            let evx = hybrid_evals(px, rx_);
+            let evy = hybrid_evals(py, ry_);
+    
             let y_size = self.m[i].y.l;
             let x_size = self.m[i].x.l;
+            
             let dense = self.as_rowwise_dense(i);
 
             println!("i: {}, x{} y{} d[0]{} d{}", i, self.m[i].x, self.m[i].y, dense.last().map_or("-".to_string(), |v| format!("{}", v.len())), dense.len());
@@ -758,32 +764,93 @@ mod tests {
     fn test_e_poly() {
         let rng = &mut test_rng();
 
-        let (nx, px, ny, py, h, d) = (
-            4,
-            0,
-            4,
-            0,
-            3,
-            3,
-        );
-        let grp = VsparkMatrixGroup::<F>::rand(
-            rng,
-            nx,
-            px,
-            ny,
-            py,
-            h,
-            d,
-        );
+        // let (nx, px, ny, py, h, d) = (
+        //     4,
+        //     0,
+        //     4,
+        //     0,
+        //     3,
+        //     3,
+        // );
+        // let grp = VsparkMatrixGroup::<F>::rand(
+        //     rng,
+        //     nx,
+        //     px,
+        //     ny,
+        //     py,
+        //     h,
+        //     d,
+        // );
+
+        let (nx, px, ny, py, h, d) = (2, 0, 2, 0, 3, 3);
+
+        let grp = VsparkMatrixGroup::<F>::new(vec![
+            VsparkMatrix{
+                px,
+                x: AdmLen::new(px, 1),
+                py,
+                y: AdmLen::new(py, 1),
+                submatrices: vec![],
+            },
+            VsparkMatrix{
+                px,
+                x: AdmLen::new(px, 2),
+                py,
+                y: AdmLen::new(py, 2),
+                submatrices: vec![
+                    VsparkRecDescr{
+                        id: 0,
+                        coeff: <F as From<u64>>::from(1),
+                        x: AdmSubset::starting_at(px, 0, 1),
+                        y: AdmSubset::starting_at(py, 0, 1),
+                    },
+                    VsparkRecDescr{
+                        id: 0,
+                        coeff: <F as From<u64>>::from(1),
+                        x: AdmSubset::starting_at(px, 1, 1),
+                        y: AdmSubset::starting_at(py, 1, 1),
+                    },
+                ],
+            },
+            VsparkMatrix{
+                px,
+                x: AdmLen::new(px, 4),
+                py,
+                y: AdmLen::new(py, 4),
+                submatrices: vec![
+                    VsparkRecDescr{
+                        id: 1,
+                        coeff: <F as From<u64>>::from(1),
+                        x: AdmSubset::starting_at(px, 0, 2),
+                        y: AdmSubset::starting_at(py, 0, 2),
+                    },
+                    VsparkRecDescr{
+                        id: 1,
+                        coeff: <F as From<u64>>::from(1),
+                        x: AdmSubset::starting_at(px, 2, 2),
+                        y: AdmSubset::starting_at(py, 2, 2),
+                    },
+                ],
+            },
+        ]);
+
+        println!("{:?}", grp.as_rowwise_dense(1));
 
         let rx = (0..(nx + if px != 0 {1 - px} else {0})).map(|_| F::rand(rng)).collect_vec();
         let ry = (0..(ny + if py != 0 {1 - py} else {0})).map(|_| F::rand(rng)).collect_vec();
+        
         let test_epoly = grp.tests_to_e_poly(nx, px, &rx, ny, py, &ry);
         let tau_table_x = compute_tau_table(nx, px, &rx);
         let tau_table_y = compute_tau_table(ny, py, &ry);
         let rec_epoly = grp.to_e_poly(&tau_table_x, &tau_table_y);
 
-        let dense = grp.as_rowwise_dense(3);
+        let tau_all_possible_offsets = tau_table_x.iter().zip(tau_table_y).map(|(x, y)| *x * y).collect_vec();
+        println!("{:?}", tau_all_possible_offsets);
+
+        let expected_answer = eq_poly(&rx[..1]).iter().zip(eq_poly(&ry[..1]).iter()).map(|(x, y)| *x * y).fold(F::zero(), |a, b| a + b);
+        println!("{:?}", expected_answer);
+
+//        let dense = grp.as_rowwise_dense(3);
         assert_eq!(test_epoly, rec_epoly);
     }
 }
