@@ -5,6 +5,8 @@ use ark_std::iterable::Iterable;
 use ark_std::{log2, UniformRand};
 use ark_std::rand::{Rng, RngCore};
 use itertools::Itertools;
+use crate::common::algfn::AlgFnUtils;
+use crate::common::math::{eq_poly, evaluate_multivar, evaluate_univar};
 use crate::common::wrapper::{ComputationalField, TFelt};
 use crate::components::sumcheck::dense_eq::eq_eval;
 
@@ -129,12 +131,16 @@ pub fn compute_tau<F: ComputationalField>(n: usize, s: AdmSubset, r: &[F]) -> F 
     partial * full
 }
 
-pub fn compute_tau_table<F: ComputationalField>(n: usize, p: usize, r: &[F]) -> Vec<F> {
+fn assert_r_size<T>(n: usize, p: usize, r: &[T]) {
     if p == 0 {
         assert!(r.len() == n - p);
     } else {
         assert!(r.len() == n + 1 - p);
     }
+}
+
+pub fn compute_tau_table<F: ComputationalField>(n: usize, p: usize, r: &[F]) -> Vec<F> {
+    assert_r_size(n, p, r);
     (0usize..(1 << (n + 1)))
         .map(|i|
             AdmSubset::decode(n, p, i).map_or(F::zero(), |s| compute_tau(n, s, r))
@@ -150,8 +156,7 @@ pub fn hybrid_eq_eval<F: TFelt>(r: &[F], x: &[F]) -> F {
         }).fold(F::one(), |acc, x| acc * x)
 }
 
-pub fn compute_tau_at_point<F: TFelt>(n: usize, p: usize, x: &[F], r: &[F]) -> F {
-    assert!(x.len() == n + 1);
+fn extend_r<F: TFelt>(n: usize, p: usize, r: &[F]) -> Vec<F> {
     let mut r = r.to_vec();
     if p != 0 {
         let mut powers = vec![r[0]];
@@ -162,6 +167,12 @@ pub fn compute_tau_at_point<F: TFelt>(n: usize, p: usize, x: &[F], r: &[F]) -> F
         powers.extend_from_slice(&r[1..]);
         r = powers;
     }
+    r
+}
+
+pub fn compute_tau_at_point<F: TFelt>(n: usize, p: usize, x: &[F], r: &[F]) -> F {
+    assert!(x.len() == n + 1);
+    let r = extend_r(n, p, r);
     assert_eq!(r.len(), n);
 
     let partials = x[0] * hybrid_eq_eval(&r[0..p], &x[1..(p + 1)]) * eq_eval(&r[p..], &x[(p + 1)..]);
@@ -258,7 +269,7 @@ impl <F: TFelt> VsparkMatrixGroup<F> {
     }
 
     pub fn trivial(px: usize, py: usize) -> Self {
-        Self::new(vec![VsparkMatrix::<F>{
+        Self::new(vec![VsparkMatrix::<F> {
             px,
             x: AdmLen::new(px, 1),
             py,
@@ -290,19 +301,23 @@ impl <F: TFelt> VsparkMatrixGroup<F> {
     pub fn push(&mut self, matrix: VsparkMatrix<F>) {
         self.m.push(matrix);
     }
-    
+
     pub fn len(&self) -> usize {
         self.m.len()
     }
 
     pub fn as_rowwise_dense(&self, id: usize) -> Vec<Vec<F>> {
         if id == 0 {
-            return vec![vec![F::one()]];
+            return vec![vec![F::zero()]];
         }
         let matrix = &self.m[id];
         let mut res = vec![vec![F::zero(); matrix.x.length()]; matrix.y.length()];
         matrix.submatrices.iter().enumerate().for_each(|(_id, submat)| {
-            let d = self.as_rowwise_dense(submat.id);
+            let d = if submat.id == 0 {
+                vec![vec![F::one()]]
+            } else {
+                self.as_rowwise_dense(submat.id)
+            };
             let xl = submat.x.start().unwrap();
             let yl = submat.y.start().unwrap();
             for (sr, r) in (yl..yl + d.len()).enumerate() {
@@ -328,23 +343,23 @@ impl <F: TFelt> VsparkMatrixGroup<F> {
 
             while matrix.submatrices.len() > (1 << h) {
                 let submatrix_chunk = matrix.submatrices.split_off(matrix.submatrices.len() - (1 << h));
-                let addition = VsparkMatrix{
+                let addition = VsparkMatrix {
                     px: matrix.px,
                     x: matrix.x,
                     py: matrix.py,
                     y: matrix.y,
                     submatrices: submatrix_chunk,
                 };
-                matrix.submatrices.push(VsparkRecDescr{
+                matrix.submatrices.push(VsparkRecDescr {
                     id: result.len(),
                     coeff: F::one(),
-                    x: AdmSubset!{
+                    x: AdmSubset! {
                         p: matrix.px,
                         a: 0,
                         k: 0,
                         u: 0,
                     },
-                    y: AdmSubset!{
+                    y: AdmSubset! {
                         p: matrix.py,
                         a: 0,
                         k: 0,
@@ -357,6 +372,64 @@ impl <F: TFelt> VsparkMatrixGroup<F> {
             result.push(matrix);
         }
         result
+    }
+}
+
+impl <F: ComputationalField> VsparkMatrixGroup<F> {
+    pub fn to_e_poly(&self, taus_x: &[F], taus_y: &[F]) -> Vec<F> {
+        let mut ret = vec![];
+
+        for i in 0..self.m.len() {
+            ret.push(self.m[i].submatrices.iter().map(|sm| {
+                taus_x[sm.x.encode()] * taus_y[sm.y.encode()] * sm.coeff * (
+                    ret[sm.id] + if sm.id == 0 {
+                        F::one()
+                    } else {
+                        F::zero()
+                    }
+                )
+            }).fold(F::zero(), |acc, x| acc + x));
+        }
+
+        ret
+    }
+}
+
+fn hybrid_evals<F: ComputationalField>(p: usize, r: &[F]) -> Vec<F> {
+    if p == 0 {
+        eq_poly(&r)
+    } else {
+        let mut powers = vec![r[0]];
+        for _ in 1..(1 << p) {
+            let tmp = powers.last().unwrap();
+            powers.push(*tmp * r[0]);
+        }
+        let eq = eq_poly(&r[1..]);
+        eq.iter().map(|x| powers.iter().map(|p| *p * *x)).flatten().collect()
+    }
+}
+
+#[cfg(test)]
+impl <F: ComputationalField> VsparkMatrixGroup<F> {
+    pub fn tests_to_e_poly(&self, nx: usize, px: usize, rx: &[F], ny: usize, py: usize, ry: &[F]) -> Vec<F> {
+        assert_r_size(nx, px, rx);
+        assert_r_size(ny, py, ry);
+        let evx = hybrid_evals(px, rx);
+        let evy = hybrid_evals(py, ry);
+
+        (0..self.m.len()).map(|i| {
+            let y_size = self.m[i].y.l;
+            let x_size = self.m[i].x.l;
+            let dense = self.as_rowwise_dense(i);
+
+            println!("i: {}, x{} y{} d[0]{} d{}", i, self.m[i].x, self.m[i].y, dense.last().map_or("-".to_string(), |v| format!("{}", v.len())), dense.len());
+            for row in &dense {
+                println!("{:?}", row)
+            }
+            dense.iter().map(|row| {
+                row.into_iter().zip_eq(evx[0..x_size].iter()).map(|(a, b)| {*a * b}).fold(F::zero(), |a, b| a + b)
+            }).zip_eq(evy[0..y_size].iter()).map(|(a, b)| {a * b}).fold(F::zero(), |a, b| {a + b})
+        }).collect_vec()
     }
 }
 
@@ -417,16 +490,19 @@ impl <F: TFelt + UniformRand> VsparkMatrixGroup<F> {
         let mut res = Self::trivial(px, py);
         let additional_count = rng.next_u64() as usize % (1 << d);
         for _ in 0..additional_count {
-            let mut m = VsparkMatrix::<F> {
-                px,
-                x: AdmLen::rand(rng, nx, px),
-                py,
-                y: AdmLen::rand(rng, ny, py),
-                submatrices: vec![],
+
+            let mut m = loop {
+                let m = VsparkMatrix::<F> {
+                    px,
+                    x: AdmLen::rand(rng, nx, px),
+                    py,
+                    y: AdmLen::rand(rng, ny, py),
+                    submatrices: vec![],
+                };
+                if m.x.l != 0 && m.y.l != 0 {
+                    break m;
+                }
             };
-            if m.x.l == 0 || m.y.l == 0 {
-                break;
-            }
 
             let n_recur = rng.next_u64() as usize % (1 << h) + 1;
             for _ in 0..n_recur {
@@ -443,7 +519,8 @@ impl <F: TFelt + UniformRand> VsparkMatrixGroup<F> {
                 };
                 let r = VsparkRecDescr::new(
                     r_idx,
-                    F::rand(rng),
+                    F::one(),
+                    // if r_idx == 0 {F::rand(rng)} else {F::one()},
                     AdmSubset::rand(rng, m.x, res.m[r_idx].x),
                     AdmSubset::rand(rng, m.y, res.m[r_idx].y),
                 );
@@ -675,5 +752,38 @@ mod tests {
         let prover_evaluation = evaluate_multivar(&tbl, &x.clone().into_iter().collect_vec());
         let verifier_evaluation = compute_tau_at_point(n, p, &x, &r);
         assert_eq!(prover_evaluation, verifier_evaluation);
+    }
+
+    #[test]
+    fn test_e_poly() {
+        let rng = &mut test_rng();
+
+        let (nx, px, ny, py, h, d) = (
+            4,
+            0,
+            4,
+            0,
+            3,
+            3,
+        );
+        let grp = VsparkMatrixGroup::<F>::rand(
+            rng,
+            nx,
+            px,
+            ny,
+            py,
+            h,
+            d,
+        );
+
+        let rx = (0..(nx + if px != 0 {1 - px} else {0})).map(|_| F::rand(rng)).collect_vec();
+        let ry = (0..(ny + if py != 0 {1 - py} else {0})).map(|_| F::rand(rng)).collect_vec();
+        let test_epoly = grp.tests_to_e_poly(nx, px, &rx, ny, py, &ry);
+        let tau_table_x = compute_tau_table(nx, px, &rx);
+        let tau_table_y = compute_tau_table(ny, py, &ry);
+        let rec_epoly = grp.to_e_poly(&tau_table_x, &tau_table_y);
+
+        let dense = grp.as_rowwise_dense(3);
+        assert_eq!(test_epoly, rec_epoly);
     }
 }
