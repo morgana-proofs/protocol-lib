@@ -70,7 +70,10 @@ impl<F: TFelt> LogupMainphase<F> {
         let mut input = input.into_iter().map(|x| Some(x)).collect_vec();
         let input = self.input_permutation.iter().map(|i| input[*i].take().unwrap()).collect_vec();
 
-        input.iter().zip_eq(self.logsizes.iter()).for_each(|(fraction_arr, logsize)| assert!(fraction_arr[0].len() == 1 << logsize && fraction_arr[1].len() == 1 << logsize));
+        input.iter().zip_eq(self.logsizes.iter()).enumerate().for_each(|(idx, (fraction_arr, logsize))| {
+            assert_eq!(fraction_arr[0].len(), 1 << logsize, "Error at index {}, num", idx);
+            assert_eq!(fraction_arr[1].len(), 1 << logsize, "Error at index {}, denum", idx);
+        });
 
 
         let mut input = input;
@@ -290,6 +293,7 @@ impl<F: ComputationalField, Transcript: TArithmeticTranscript<F>> TProverImpl<Tr
         (accumulated_claims, ())    }
 }
 
+#[derive(Debug, Clone)]
 pub struct IndexedLookupInput<F: TFelt> {
     pub values: Vec<F>,
     pub accesses: Vec<F>,
@@ -297,12 +301,14 @@ pub struct IndexedLookupInput<F: TFelt> {
     pub indexes: Vec<F>,
 }
 
+#[derive(Debug, Clone)]
 pub struct SubsetLookupInput<F: TFelt> {
     pub values: Vec<F>,
     pub accesses: Vec<F>,
     pub table: Vec<F>,
 }
 
+#[derive(Debug, Clone)]
 pub enum LookupInput<F: TFelt> {
     Indexed(IndexedLookupInput<F>),
     Subset(SubsetLookupInput<F>),
@@ -570,6 +576,7 @@ mod tests {
     use crate::transcript::transcript::{TTranscriptInterface, TTranscriptSupports};
     use super::*;
     use ark_bn254::Fq as F;
+    use ark_ff::Fp256;
     use ark_std::rand::RngCore;
     use ark_std::UniformRand;
     use num_traits::{One, Zero};
@@ -660,10 +667,22 @@ mod tests {
         let proto = Logup::new(lookups);
 
         let mut ctx = ManualTestTranscript::new((0..1000).map(|_| F::rand(rng)).collect_vec());
-        let (pclaims, _) = proto.prove::<Logup<_,>>(&mut ctx, (), data);
+        let (pclaims, _) = proto.prove::<Logup<_,>>(&mut ctx, (), data.clone());
         ctx.end();
         let vclaims = proto.verify(&mut ctx, ());
 
+
+        for (pclaim, input) in pclaims.iter().zip(data.iter()) {
+            match (pclaim, input) {
+                (LookupClaim::Indexed(IndexedLookupClaim{ table: table_claim, .. }), LookupInput::Indexed(IndexedLookupInput{ table, .. })) => {
+                    assert!(table_claim.ev == evaluate_multivar(&table, &table_claim.point));
+                }
+                (LookupClaim::Subset(SubsetLookupClaim{table: table_claim, ..}), LookupInput::Subset(SubsetLookupInput{ table, .. })) => {
+                    assert!(table_claim.ev == evaluate_multivar(&table, &table_claim.point));
+                }
+                (_, _) => panic!("unexpected input"),
+            }
+        }
         assert_eq!(pclaims, vclaims);
     }
 }

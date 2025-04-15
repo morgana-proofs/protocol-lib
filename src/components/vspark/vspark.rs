@@ -4,9 +4,11 @@ use std::marker::PhantomData;
 use std::ops::Index;
 use ark_ff::PrimeField;
 use ark_std::iterable::Iterable;
+use ark_std::log2;
 use itertools::Itertools;
 use crate::common::algfn::{AlgFn, AlgFnSO, AlgFnSoUtils};
 use crate::common::claims::{EvalClaim, SinglePointClaims, SumClaim};
+use crate::common::math::evaluate_multivar;
 use crate::common::wrapper::{ComputationalField, TFelt};
 use crate::components::lookups::logup::logup::{IndexedLookupClaim, IndexedLookupInput, Logup, LookupClaim, LookupInput, LookupType};
 use crate::components::sumcheck::dense::DenseSumcheck;
@@ -17,44 +19,6 @@ use crate::components::sumcheck::sumcheckable::Sumcheckable;
 use crate::components::vspark::matrix::{compute_tau_at_point, compute_tau_table};
 use crate::transcript::transcript::{TArithmeticTranscript, TTranscriptInterface};
 use crate::protocol::component::{TProtocol, TProverImpl};
-
-pub struct Padded<T: Clone, It: Iterator<Item = T>> {
-    inner: It,
-    len: usize,
-    up_to: usize,
-    pad: T
-}
-
-impl<T: Clone, It: Iterator<Item=T>> Iterator for Padded<T, It> {
-    type Item = T;
-
-    fn next(&mut self) -> Option<Self::Item> {
-        self.len += 1;
-        self.inner.next().or_else(|| {
-            if self.len <= self.up_to {
-                Some(self.pad.clone())
-            } else {
-                None
-            }
-        })
-    }
-}
-
-pub trait Pad<T: Clone>: Sized
-where Self: Iterator<Item = T> {
-    fn pad(self, elt: T, up_to: usize) -> Padded<T, Self>;
-}
-
-impl<T: Clone, It: Iterator<Item=T>> Pad<T> for It {
-    fn pad(self, elt: T, up_to: usize) -> Padded<T, Self> {
-        Padded {
-            inner: self,
-            len: 0,
-            up_to,
-            pad: elt,
-        }
-    }
-}
 
 pub struct Vspark<F: TFelt> {
     d: usize,  // matrix number logsize
@@ -67,17 +31,21 @@ pub struct Vspark<F: TFelt> {
 }
 
 impl<F: TFelt> Vspark<F> {
+    fn new(nx: usize, px: usize, ny: usize, py: usize, h: usize, d: usize) -> Self {
+        Self {
+            d,
+            h,
+            nx,
+            px,
+            ny,
+            py,
+            _pd: Default::default(),
+        }
+    }
+
     fn compute_tau(n: usize, p: usize, x: &[F], r: &[F]) -> F {
         compute_tau_at_point(n, p, x, r)
     }
-}
-
-///
-///
-type VsparkClaimsBefore<F: TFelt> = EvalClaim<F>;  // claim of M[t](r_x, r_y) at point (t | r_x | r_y)
-
-pub struct VsparkClaimsAfter<F: TFelt> {
-    _pd: PhantomData<F>,
 }
 
 pub struct VsparkProverInput<F: TFelt> {
@@ -111,7 +79,7 @@ impl<F: TFelt> AlgFnSO<F> for VsparkFinalProd<F> {
 }
 
 impl<F: TFelt, Transcript: TArithmeticTranscript<F>> TProtocol<Transcript> for Vspark<F> {
-    type ClaimsBefore = VsparkClaimsBefore<F>;
+    type ClaimsBefore = EvalClaim<F>;
     type ClaimsAfter = (SinglePointClaims<F>, SinglePointClaims<F>, EvalClaim<F>, EvalClaim<F>);
 
     fn verify(&self, ctx: &mut Transcript, claims: Self::ClaimsBefore) -> Self::ClaimsAfter {
@@ -231,31 +199,36 @@ impl<F: ComputationalField, Transcript: TArithmeticTranscript<F>> TProverImpl<Tr
         assert_eq!(rs.len(), 0);
 
         let lookup = Logup::new(vec![
-            LookupType::Indexed(protocol.nx + 1, protocol.h + protocol.d),
-            LookupType::Indexed(protocol.ny + 1, protocol.h + protocol.d),
+            LookupType::Indexed(protocol.nx + 2, protocol.h + protocol.d),
+            LookupType::Indexed(protocol.ny + 2, protocol.h + protocol.d),
             LookupType::Indexed(protocol.d, protocol.h + protocol.d),
         ]);
 
         let tau_table_x = compute_tau_table(protocol.nx, protocol.px, r_x);
+        assert_eq!(tau_table_x.len(), 1 << protocol.nx + 2);
         let mut tau_accesses_x = tau_table_x.iter().map(|_| F::zero()).collect::<Vec<_>>();
         let tau_values_x = x_poly.iter().map(|idx| {
-            tau_accesses_x[*idx] = tau_accesses_x[*idx] + F::one();
+            tau_accesses_x[*idx] += F::one();
             tau_table_x[*idx]
         }).collect::<Vec<_>>();
 
         let tau_table_y = compute_tau_table(protocol.ny, protocol.py, r_y);
-        let mut tau_accesses_y = tau_table_x.iter().map(|_| F::zero()).collect::<Vec<_>>();
+        assert_eq!(tau_table_y.len(), 1 << protocol.ny + 2);
+        let mut tau_accesses_y = tau_table_y.iter().map(|_| F::zero()).collect::<Vec<_>>();
         let tau_values_y = y_poly.iter().map(|idx| {
-            tau_accesses_y[*idx] = tau_accesses_y[*idx] + F::one();
+            tau_accesses_y[*idx] += F::one();
             tau_table_y[*idx]
         }).collect::<Vec<_>>();
 
         let mut accesses_i = e_poly.iter().map(|_| F::zero()).collect::<Vec<_>>();
-        let values_i = y_poly.iter().map(|idx| {
-            accesses_i[*idx] = tau_accesses_y[*idx] + F::one();
+        let values_i = i_poly.iter().map(|idx| {
+            accesses_i[*idx] += F::one();
             e_poly[*idx]
         }).collect::<Vec<_>>();
 
+        assert_eq!(e_poly.len(), 1 << log2(e_poly.len()));
+        assert_eq!(accesses_i.len(), 1 << log2(accesses_i.len()));
+        assert_eq!(values_i.len(), 1 << log2(values_i.len()));
 
         let i_poly_f = i_poly.iter().map(|x| F::from(*x as u64)).collect_vec();
         let x_poly_f = x_poly.iter().map(|x| F::from(*x as u64)).collect_vec();
@@ -263,13 +236,13 @@ impl<F: ComputationalField, Transcript: TArithmeticTranscript<F>> TProverImpl<Tr
 
         let lookup_advice = vec![
             LookupInput::indexed_by_usize(
-                tau_table_x,
+                tau_table_x.clone(),
                 tau_accesses_x,
                 tau_values_x.clone(),
                 x_poly,
             ),
             LookupInput::indexed_by_usize(
-                tau_table_y,
+                tau_table_y.clone(),
                 tau_accesses_y,
                 tau_values_y.clone(),
                 y_poly,
@@ -295,6 +268,7 @@ impl<F: ComputationalField, Transcript: TArithmeticTranscript<F>> TProverImpl<Tr
         let IndexedLookupClaim{ accesses: y_acc, table: tau_y_claim, values: y_pull, indexes: y_claim } = b;
         let IndexedLookupClaim{ accesses: i_acc, table: e_claim_lookup, values: i_pull, indexes: i_claim } = c;
 
+        assert!(tau_x_claim.ev == evaluate_multivar(&tau_table_x, &tau_x_claim.point));
         (tau_x_claim.ev - Self::compute_tau(protocol.nx, protocol.px, &tau_x_claim.point, r_x)).require();
         (tau_y_claim.ev - Self::compute_tau(protocol.ny, protocol.py, &tau_y_claim.point, r_y)).require();
 
@@ -401,14 +375,74 @@ impl<F: ComputationalField, Transcript: TArithmeticTranscript<F>> TProverImpl<Tr
 #[cfg(test)]
 mod tests {
     use itertools::Itertools;
-    use crate::components::vspark::vspark::{Pad, Vspark};
+    use crate::components::vspark::vspark::{Vspark, VsparkProverInput};
     use ark_bn254::Fq as F;
+    use ark_std::UniformRand;
+    use num_traits::Zero;
+    use crate::common::claims::EvalClaim;
+    use crate::common::math::evaluate_multivar;
+    use crate::components::sumcheck::multi_dense_eq::MultiDenseEqSumcheck;
+    use crate::components::vspark::matrix::{compute_tau_table, VsparkMatrixGroup};
+    use crate::protocol::component::TProtocol;
+    use crate::transcript::transcript::tests::ManualTestTranscript;
 
     #[test]
-    fn test_pad_iterator() {
-        assert_eq!(
-            (0..3).collect_vec().into_iter().pad(4, 10).collect_vec(),
-            vec![0, 1, 2, 4, 4, 4, 4, 4, 4, 4],
-        )
+    fn test_vspark() {
+        let rng = &mut ark_std::test_rng();
+        let (nx, px, ny, py, h, d) = (
+            4,
+            0,
+            4,
+            0,
+            3,
+            3,
+        );
+        let grp = VsparkMatrixGroup::<F>::rand(
+            rng,
+            nx,
+            px,
+            ny,
+            py,
+            h,
+            d,
+        );
+        let vspark = Vspark::<F>::new(
+            nx,
+            px,
+            ny,
+            py,
+            h,
+            d,
+        );
+
+        let rd = (0..d).map(|_| F::rand(rng)).collect_vec();
+        let rx = (0..if px == 0 {nx} else {nx + 1 - px}).map(|_| F::rand(rng)).collect_vec();
+        let ry = (0..if py == 0 {ny} else {ny + 1 - py}).map(|_| F::rand(rng)).collect_vec();
+        let mut r = rd.clone();
+        r.extend_from_slice(&rx);
+        r.extend_from_slice(&ry);
+
+        let tau_table_x = compute_tau_table(nx, px, &rx);
+        let tau_table_y = compute_tau_table(nx, px, &ry);
+        let e_poly = grp.e_poly(&tau_table_x, &tau_table_y, d);
+
+        let e_claim_before = EvalClaim {
+            ev: evaluate_multivar(&e_poly, &rd),
+            point: r,
+        };
+
+        let prover_input = VsparkProverInput {
+            e_poly: e_poly.clone(),
+            c_poly: grp.c_poly(d, h),
+            i_poly: grp.i_poly(d, h),
+            x_poly: grp.x_poly(d, h),
+            y_poly: grp.y_poly(d, h),
+            _pd: Default::default(),
+        };
+
+        let mut transcript_p = ManualTestTranscript::new((0..1000).map(|_| F::rand(rng)).collect_vec());
+        let (output_claims, _) = vspark.prove::<Vspark<_,>>(&mut transcript_p, e_claim_before.clone(), prover_input);
+        let proof = transcript_p.end();
+
     }
 }
