@@ -240,6 +240,23 @@ pub fn eq_poly<F: ComputationalField>(pt: &[F]) -> Vec<F> {
     eq_poly_sequence_last(&pt).unwrap()
 }
 
+
+pub fn top_bind_multivar<F: ComputationalField>(poly: &[F], t: F) -> Vec<F> {
+    let mut res = poly[..poly.len() / 2].to_vec();
+    for i in 0..res.len() {
+        res[i] += t * (poly[poly.len() / 2 + i] - poly[i]);
+    }
+    res
+}
+
+pub fn top_bind_multivar_point<F: ComputationalField>(poly: &[F], pt: &[F]) -> Vec<F> {
+    let mut res = poly.to_vec();
+    for t in pt {
+        res = top_bind_multivar(&res, *t);
+    }
+    res
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

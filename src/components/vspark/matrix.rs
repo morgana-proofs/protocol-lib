@@ -256,7 +256,6 @@ pub fn compute_tau_at_point<F: TFelt>(n: usize, p: usize, x: &[F], r: &[F]) -> F
         tmp *= border_sum;
         fulls = fulls + tmp;
     }
-    println!("{:?} {:?}", partials, fulls);
     partials + fulls
 }
 
@@ -533,10 +532,6 @@ impl <F: ComputationalField> VsparkMatrixGroup<F> {
             
             let dense = self.as_rowwise_dense(i);
 
-            println!("i: {}, x{} y{} d[0]{} d{}", i, self.m[i].x, self.m[i].y, dense.last().map_or("-".to_string(), |v| format!("{}", v.len())), dense.len());
-            for row in &dense {
-                println!("{:?}", row)
-            }
             dense.iter().map(|row| {
                 row.into_iter().zip_eq(evx[0..x_size].iter()).map(|(a, b)| {*a * b}).fold(F::zero(), |a, b| a + b)
             }).zip_eq(evy[0..y_size].iter()).map(|(a, b)| {a * b}).fold(F::zero(), |a, b| {a + b})
@@ -656,6 +651,7 @@ mod tests {
     use super::*;
     use ark_bn254::Fq as F;
     use ark_std::{test_rng, UniformRand};
+    use itertools::repeat_n;
     use crate::common::math::{evaluate_multivar, evaluate_univar};
     use crate::common::wrapper::TFeltUtil;
 
@@ -981,6 +977,25 @@ mod tests {
             // println!("{:?}", expected_answer);
 
             assert_eq!(test_epoly, rec_epoly);
+
+            let mut adjusted_e_poly = test_epoly.clone();
+            adjusted_e_poly[0] += F::one();
+
+            let parts = vec![
+                grp.c_poly(h, d),
+                grp.i_poly(h, d).into_iter().map(|x| adjusted_e_poly[x]).collect_vec(),
+                grp.x_poly(h, d).into_iter().map(|x| tau_table_x[x]).collect_vec(),
+                grp.y_poly(h, d).into_iter().map(|x| tau_table_y[x]).collect_vec(),
+            ];
+            let e_prod = (0..parts[0].len())
+                .map(|i| {
+                    parts[0][i] * parts[1][i] * parts[2][i] * parts[3][i]
+                })
+                .chunks(1 << h).into_iter().map(|c| {
+                    c.sum::<F>()
+                })
+                .collect_vec();
+            assert_eq!(e_prod, test_epoly);
         }
     }
 }

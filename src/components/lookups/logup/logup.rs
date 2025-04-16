@@ -391,15 +391,9 @@ impl<F: TFelt, Dialect: TArithmeticTranscript<F>> TProtocol<Dialect> for Logup<F
         }).max();
         let c = self.lookups.iter().map(|_| ctx.challenge()).collect_vec();
 
-        let gammas;
-        if let Some(max_table_size) = max_table_size {
-            let gamma = ctx.challenge();
-            let mut running_gamma = F::zero();
-            gammas = (0..max_table_size).map(|_| {
-                let res = running_gamma;
-                running_gamma = res + gamma.clone();
-                res
-            }).collect_vec();
+        let mut gamma = None;
+        if let Some(_) = max_table_size {
+            gamma = Some(ctx.challenge());
         }
 
         let mainphase = LogupMainphase::new(self.lookups.iter().map(|lt| match lt {
@@ -422,18 +416,20 @@ impl<F: TFelt, Dialect: TArithmeticTranscript<F>> TProtocol<Dialect> for Logup<F
             let r_point = rc.point;
 
             let accesses_claim = ln_claim;
-            let table_claim = ld_claim - c[lookup_index] + match lookup_type {
+            let table_claim = ld_claim - c[lookup_index] - match lookup_type {
                 LookupType::Subset(_, _) => {
                     F::zero()
                 }
                 LookupType::Indexed(_, _) => {
-                    evaluate_index_poly(&l_point)
+                    let gamma = gamma.as_ref().unwrap();
+                    *gamma * evaluate_index_poly(&l_point)
                 }
             };
             match lookup_type {
                 LookupType::Indexed(_, _) => {
+                    let gamma = gamma.as_ref().unwrap();
                     let indexes_claim = ctx.read();
-                    let values_claim = rd_claim - c[lookup_index] + evaluate_index_poly(&r_point) * indexes_claim;
+                    let values_claim = rd_claim - c[lookup_index] - indexes_claim * gamma;
 
                     LookupClaim::Indexed(IndexedLookupClaim{
                         accesses: EvalClaim{ ev: accesses_claim, point: l_point.clone() },
@@ -544,9 +540,10 @@ impl<F: ComputationalField, Transcript: TArithmeticTranscript<F>> TProverImpl<Tr
             };
             match lookup_type {
                 LookupInput::Indexed(IndexedLookupInput{ values, accesses, table, indexes}) => {
+                    let gamma = gamma.as_ref().unwrap();
                     let indexes_claim = evaluate_multivar(&indexes, &r_point);
                     ctx.write(&indexes_claim);
-                    let values_claim = rd_claim - c[lookup_index] - evaluate_index_poly(&r_point) * indexes_claim;
+                    let values_claim = rd_claim - c[lookup_index] - indexes_claim * gamma;
 
                     LookupClaim::Indexed(IndexedLookupClaim{
                         accesses: EvalClaim{ ev: accesses_claim, point: l_point.clone() },
@@ -681,8 +678,8 @@ mod tests {
         let vclaims = proto.verify(&mut ctx, ());
 
 
-        for (pclaim, input) in pclaims.iter().zip(data.iter()) {
-            match (pclaim, input) {
+        for (claim, input) in vclaims.iter().zip(data.iter()) {
+            match (claim, input) {
                 (LookupClaim::Indexed(
                     IndexedLookupClaim{ 
                         accesses: accesses_claim, 
@@ -719,8 +716,8 @@ mod tests {
                 (_, _) => panic!("unexpected input"),
             }
         }
-        for (idx, (pclaim, input)) in pclaims.iter().zip(data.iter()).enumerate() {
-            match (pclaim, input) {
+        for (idx, (claim, input)) in vclaims.iter().zip(data.iter()).enumerate() {
+            match (claim, input) {
                 (LookupClaim::Indexed(
                     IndexedLookupClaim{
                         accesses: accesses_claim,

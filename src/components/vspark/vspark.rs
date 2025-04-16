@@ -5,10 +5,10 @@ use std::ops::Index;
 use ark_ff::PrimeField;
 use ark_std::iterable::Iterable;
 use ark_std::log2;
-use itertools::Itertools;
+use itertools::{repeat_n, Itertools};
 use crate::common::algfn::{AlgFn, AlgFnSO, AlgFnSoUtils};
 use crate::common::claims::{EvalClaim, SinglePointClaims, SumClaim};
-use crate::common::math::evaluate_multivar;
+use crate::common::math::{eq_poly, evaluate_multivar, top_bind_multivar_point};
 use crate::common::wrapper::{ComputationalField, TFelt};
 use crate::components::lookups::logup::logup::{IndexedLookupClaim, IndexedLookupInput, Logup, LookupClaim, LookupInput, LookupType};
 use crate::components::sumcheck::dense::DenseSumcheck;
@@ -66,15 +66,15 @@ pub struct VsparkFinalProd<F>(F);
 
 impl<F: TFelt> AlgFnSO<F> for VsparkFinalProd<F> {
     fn exec(&self, args: &impl Index<usize, Output=F>) -> F {
-        args[0] * args[1] * args[2] * args[3] + self.0
+        args[0] * args[1] * args[2] * args[3] * (args[4] + self.0)
     }
 
     fn deg(&self) -> usize {
-        4
+        5
     }
 
     fn n_ins(&self) -> usize {
-        4
+        5
     }
 }
 
@@ -274,20 +274,23 @@ impl<F: ComputationalField, Transcript: TArithmeticTranscript<F>> TProverImpl<Tr
 
         let gamma = (0..protocol.d).map(|_| ctx.challenge()).collect_vec();
 
-        let e_in_gamma_eval = ctx.read();
+        let e_in_gamma_eval = evaluate_multivar(&e_poly, &gamma);
+        ctx.write(&e_in_gamma_eval);
 
         let delta0_in_gamma = eq_eval(&vec![F::zero(); protocol.d], &gamma);
         let f = VsparkFinalProd(delta0_in_gamma);
 
         let e_data = vec![
+            eq_poly(&gamma).into_iter().map(|x| repeat_n(x, (1 << protocol.h))).flatten().collect_vec(),
             c_poly,
-            i_poly_f.clone(),
-            x_poly_f.clone(),
-            y_poly_f.clone(),
+            tau_values_x.clone(),
+            tau_values_y.clone(),
+            values_i.clone(),
         ];
+        println!("{:?}", e_data.iter().map(|v| v.len()).collect_vec());
         let e_output = f.map_so(&e_data.iter().map(|v| v.as_ref()).collect_vec());
 
-        let sumcheck = DenseSumcheck::new(f, protocol.h);
+        let sumcheck = DenseSumcheck::new(f, protocol.h + protocol.d);
 
         let e_claim_sumcheck: SinglePointClaims<F> = sumcheck.prove::<DenseSumcheck<_,_>>(ctx, SumClaim(e_in_gamma_eval), e_data).0;
 
@@ -374,17 +377,76 @@ impl<F: ComputationalField, Transcript: TArithmeticTranscript<F>> TProverImpl<Tr
 
 #[cfg(test)]
 mod tests {
-    use itertools::Itertools;
-    use crate::components::vspark::vspark::{Vspark, VsparkProverInput};
+    use itertools::{repeat_n, Itertools};
+    use crate::components::vspark::vspark::{Vspark, VsparkFinalProd, VsparkProverInput};
     use ark_bn254::Fq as F;
-    use ark_std::UniformRand;
+    use ark_std::{test_rng, UniformRand};
     use num_traits::Zero;
+    use crate::common::algfn::AlgFnSoUtils;
     use crate::common::claims::EvalClaim;
-    use crate::common::math::evaluate_multivar;
+    use crate::common::math::{eq_poly, evaluate_multivar};
+    use crate::components::sumcheck::dense_eq::eq_eval;
     use crate::components::sumcheck::multi_dense_eq::MultiDenseEqSumcheck;
     use crate::components::vspark::matrix::{compute_tau_table, VsparkMatrixGroup};
     use crate::protocol::component::TProtocol;
     use crate::transcript::transcript::tests::ManualTestTranscript;
+
+
+    #[test]
+    fn epoly_sumcheck() {
+        let rng = &mut test_rng();
+
+        let (nx, px, ny, py, h, d) = (
+            4,
+            0,
+            4,
+            0,
+            3,
+            3,
+        );
+        let grp = VsparkMatrixGroup::<F>::rand(
+            rng,
+            nx,
+            px,
+            ny,
+            py,
+            h,
+            d,
+        );
+
+
+        let rx = (0..(nx + if px != 0 { 1 - px } else { 0 })).map(|_| F::zero()).collect_vec();
+        let ry = (0..(ny + if py != 0 { 1 - py } else { 0 })).map(|_| F::zero()).collect_vec();
+
+        let tau_table_x = compute_tau_table(nx, px, &rx);
+        let tau_table_y = compute_tau_table(ny, py, &ry);
+
+        let e_poly = grp.e_poly(&tau_table_x, &tau_table_y, d);
+
+        let gamma = (0..d).map(|_| F::zero()).collect_vec();
+
+        let e_in_gamma_eval = evaluate_multivar(&e_poly, &gamma);
+
+        let delta0_in_gamma = eq_eval(&vec![F::zero(); d], &gamma);
+        let f = VsparkFinalProd(delta0_in_gamma);
+
+
+        let parts = vec![
+            eq_poly(&gamma).into_iter().map(|x| repeat_n(x, (1 << h))).flatten().collect_vec(),
+            grp.c_poly(h, d),
+            grp.x_poly(h, d).into_iter().map(|x| tau_table_x[x]).collect_vec(),
+            grp.y_poly(h, d).into_iter().map(|x| tau_table_y[x]).collect_vec(),
+            grp.i_poly(h, d).into_iter().map(|x| e_poly[x]).collect_vec(),
+        ];
+
+        let results = f.map_so(&parts.iter().map(|v| v.as_slice()).collect_vec()).iter()
+            .chunks(1 << h).into_iter().map(|c| {
+                c.sum::<F>()
+            })
+            .collect_vec();;
+
+        assert_eq!(results, e_poly);
+    }
 
     #[test]
     fn test_vspark() {

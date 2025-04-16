@@ -68,7 +68,7 @@ impl<F: ComputationalField, Fun: AlgFnSO<F>, S: Sumcheckable<F>, Transcript: TAr
         }
 //        rs.reverse();
         let final_evals = sumcheckable.final_evals();
-        debug_assert!(protocol.f.exec(&final_evals) == sum_claim); // Final evals are passed as prover output for last round postprocess.
+        debug_assert_eq!(protocol.f.exec(&final_evals), sum_claim, "Final evals are passed as prover output for last round postprocess");
         (EvalClaim{ev: sum_claim, point: rs}, final_evals)
     }
 }
