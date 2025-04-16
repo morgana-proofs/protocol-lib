@@ -198,8 +198,8 @@ impl<F: TFelt, Dialect: TArithmeticTranscript<F>> TProtocol<Dialect> for LogupMa
         if self.do_initial_split {
             accumulated_claims.push(tmp);
         } else {
-            accumulated_claims.push(SinglePointClaims{ point: tmp.point.clone(), evs: vec![tmp.evs[0], tmp.evs[1]] });
             accumulated_claims.push(SinglePointClaims{ point: tmp.point.clone(), evs: vec![tmp.evs[2], tmp.evs[3]] });
+            accumulated_claims.push(SinglePointClaims{ point: tmp.point.clone(), evs: vec![tmp.evs[0], tmp.evs[1]] });
         }
 
         self.input_permutation.iter()
@@ -251,7 +251,6 @@ impl<F: ComputationalField, Transcript: TArithmeticTranscript<F>> TProverImpl<Tr
                 let [advice_r_0, advice_r_1] = witness.pop().unwrap();
                 let [advice_l_0, advice_l_1] = witness.pop().unwrap();
                 let advice = vec![advice_l_0, advice_l_1, advice_r_0, advice_r_1];
-                println!("Reducing claim with advice sizes: {:?} through DenseEqSumcheck", advice.iter().map(|x| x.len()).collect_vec());
                 let (claim_4, _) = proto.prove::<DenseEqSumcheck<_,_,>>(
                     ctx,
                     running_claim.clone(),
@@ -267,7 +266,6 @@ impl<F: ComputationalField, Transcript: TArithmeticTranscript<F>> TProverImpl<Tr
                     logsizes.pop();
                 } else {
                     let split = SplitAt::new(SplitIdx::HI(0), 2);
-                    println!("Reducing claim through Split, witness sizes: {:?}", witness.iter().map(|x| x[0].len()).collect_vec());
                     (running_claim, _) = split.prove::<SplitAt<_,>>(ctx, claim_4, ());
                     curr_logsize += 1;
                 }
@@ -276,8 +274,8 @@ impl<F: ComputationalField, Transcript: TArithmeticTranscript<F>> TProverImpl<Tr
         if protocol.do_initial_split {
             accumulated_claims.push(tmp);
         } else {
-            accumulated_claims.push(SinglePointClaims{ point: tmp.point.clone(), evs: vec![tmp.evs[0], tmp.evs[1]] });
             accumulated_claims.push(SinglePointClaims{ point: tmp.point.clone(), evs: vec![tmp.evs[2], tmp.evs[3]] });
+            accumulated_claims.push(SinglePointClaims{ point: tmp.point.clone(), evs: vec![tmp.evs[0], tmp.evs[1]] });
         }
 
         accumulated_claims = protocol.input_permutation.iter()
@@ -287,7 +285,9 @@ impl<F: ComputationalField, Transcript: TArithmeticTranscript<F>> TProverImpl<Tr
                     .rev()
             )
             .sorted_by(|(a, _), (b, _)| a.cmp(b))
-            .map(|(_, x)| x)
+            .map(|(idx, x)| {
+                x
+            })
             .collect_vec();
 
         (accumulated_claims, ())    }
@@ -533,19 +533,20 @@ impl<F: ComputationalField, Transcript: TArithmeticTranscript<F>> TProverImpl<Tr
             let r_point = rc.point;
 
             let accesses_claim = ln_claim;
-            let table_claim = ld_claim - c[lookup_index] + match lookup_type {
+            let table_claim = ld_claim - c[lookup_index] - match lookup_type {
                 LookupInput::Subset(_) => {
                     F::zero()
                 }
                 LookupInput::Indexed(_) => {
-                    evaluate_index_poly(&l_point)
+                    let gamma = gamma.as_ref().unwrap();
+                    *gamma * evaluate_index_poly(&l_point)
                 }
             };
             match lookup_type {
                 LookupInput::Indexed(IndexedLookupInput{ values, accesses, table, indexes}) => {
                     let indexes_claim = evaluate_multivar(&indexes, &r_point);
                     ctx.write(&indexes_claim);
-                    let values_claim = rd_claim - c[lookup_index] + evaluate_index_poly(&r_point) * indexes_claim;
+                    let values_claim = rd_claim - c[lookup_index] - evaluate_index_poly(&r_point) * indexes_claim;
 
                     LookupClaim::Indexed(IndexedLookupClaim{
                         accesses: EvalClaim{ ev: accesses_claim, point: l_point.clone() },
@@ -573,51 +574,59 @@ impl<F: ComputationalField, Transcript: TArithmeticTranscript<F>> TProverImpl<Tr
 
 #[cfg(test)]
 mod tests {
-    use crate::transcript::transcript::{TTranscriptInterface, TTranscriptSupports};
     use super::*;
     use ark_bn254::Fq as F;
-    use ark_ff::Fp256;
     use ark_std::rand::RngCore;
     use ark_std::UniformRand;
     use num_traits::{One, Zero};
-    use crate::common::wrapper::Invert;
     use crate::transcript::transcript::tests::ManualTestTranscript;
 
     #[test]
     fn test_logup_mainphase() {
         let rng = &mut ark_std::test_rng();
-        let logsizes = vec![
-            4,
-            8,
-            8,
-            4,
-        ];
-        let data = logsizes.iter().map(|ls| {
-            [
-                (0..(1 << ls)).map(|_| F::rand(rng)).collect_vec(),
-                (0..(1 << ls)).map(|_| F::rand(rng)).collect_vec(),
-            ]
-        }).collect_vec();
+        for _ in 0..10 {
+            let logsizes = vec![
+                4,
+                8,
+                8,
+                4,
+                6,
+                7,
+                3,
+            ];
+            let data = logsizes.iter().map(|ls| {
+                [
+                    (0..(1 << ls)).map(|_| F::rand(rng)).collect_vec(),
+                    (0..(1 << ls)).map(|_| F::rand(rng)).collect_vec(),
+                ]
+            }).collect_vec();
 
-        let logup = LogupMainphase::new(logsizes.clone());
+            let logup = LogupMainphase::new(logsizes.clone());
 
-        let (_, [num, denom]) = logup.make_witness(data.clone());
+            let (_, [num, denom]) = logup.make_witness(data.clone());
 
-        assert!(denom != F::zero());
+            assert!(denom != F::zero());
 
-        let sum_claim = SumClaim(num / denom);
+            let sum_claim = SumClaim(num / denom);
 
-        let mut ctx = ManualTestTranscript::new((0..1000).map(|_| F::rand(rng)).collect_vec());
+            let mut ctx = ManualTestTranscript::new((0..1000).map(|_| F::rand(rng)).collect_vec());
 
-        let (pclaims, _) = logup.prove::<LogupMainphase<_>>(&mut ctx, sum_claim.clone(), data);
-        ctx.end();
-        let vclaims = logup.verify(&mut ctx, sum_claim);
+            let (pclaims, _) = logup.prove::<LogupMainphase<_>>(&mut ctx, sum_claim.clone(), data.clone());
+            ctx.end();
+            let vclaims = logup.verify(&mut ctx, sum_claim);
 
-        pclaims.iter().zip(logsizes).for_each(|(claim, logsize)| {
-            println!("{}, {}", logsize, claim.point.len());
-            assert_eq!(logsize, claim.point.len());
-        });
-        assert_eq!(pclaims, vclaims);
+            pclaims.iter().zip(logsizes.iter()).zip(data.iter()).enumerate().for_each(|(idx, (((claim, logsize), input)))| {
+                println!("ev: {:?}, mv: {:?}, idx: {}", claim.evs[0], evaluate_multivar(&input[0], &claim.point), idx);
+                println!("ev: {:?}, mv: {:?}, idx: {}", claim.evs[1], evaluate_multivar(&input[1], &claim.point), idx);
+            });
+            pclaims.iter().zip(logsizes.iter()).zip(data.iter()).enumerate().for_each(|(idx, (((claim, logsize), input)))| {
+                assert_eq!(claim.evs.len(), 2, "Error at {}", idx);
+                assert_eq!(*logsize, claim.point.len(), "Error at {}", idx);
+                assert_eq!(claim.evs[0], evaluate_multivar(&input[0], &claim.point), "Error at {}", idx);
+                assert_eq!(claim.evs[1], evaluate_multivar(&input[1], &claim.point), "Error at {}", idx);
+            });
+            assert_eq!(pclaims, vclaims);
+        }
     }
 
     #[test]
@@ -640,7 +649,7 @@ mod tests {
             let indexes = (0..(1 << values_logsize)).map(|i| rng.next_u64() as usize % (1 << table_logsize) as usize).collect_vec();
             let mut accesses = table.iter().map(|_|  F::zero()).collect_vec();
             let values = indexes.iter().map(|i| {
-                accesses[*i] = accesses[*i] + F::one();
+                accesses[*i] += F::one();
                 table[*i]
             }).collect_vec();
             let indexes = indexes.into_iter().map(|x| F::from(x as u64)).collect_vec();
@@ -674,15 +683,81 @@ mod tests {
 
         for (pclaim, input) in pclaims.iter().zip(data.iter()) {
             match (pclaim, input) {
-                (LookupClaim::Indexed(IndexedLookupClaim{ table: table_claim, .. }), LookupInput::Indexed(IndexedLookupInput{ table, .. })) => {
-                    assert!(table_claim.ev == evaluate_multivar(&table, &table_claim.point));
+                (LookupClaim::Indexed(
+                    IndexedLookupClaim{ 
+                        accesses: accesses_claim, 
+                        table: table_claim, 
+                        values: values_claim, 
+                        indexes: indexes_claim, 
+                    }), LookupInput::Indexed(
+                    IndexedLookupInput{
+                        values, 
+                        accesses,
+                        table,
+                        indexes,
+                    })) => {
+                        println!("Values | ev: {} mv: {}", values_claim.ev, evaluate_multivar(&values, &values_claim.point));
+                        println!("Access | ev: {} mv: {}", accesses_claim.ev, evaluate_multivar(&accesses, &accesses_claim.point));
+                        println!("Table  | ev: {} mv: {}", table_claim.ev, evaluate_multivar(&table, &table_claim.point));
+                        println!("Index  | ev: {} mv: {}", indexes_claim.ev, evaluate_multivar(&indexes, &indexes_claim.point));
                 }
-                (LookupClaim::Subset(SubsetLookupClaim{table: table_claim, ..}), LookupInput::Subset(SubsetLookupInput{ table, .. })) => {
-                    assert!(table_claim.ev == evaluate_multivar(&table, &table_claim.point));
+                (LookupClaim::Subset(
+                    SubsetLookupClaim{
+                        accesses: accesses_claim, 
+                        table: table_claim, 
+                        values: values_claim,
+                    }), LookupInput::Subset(
+                    SubsetLookupInput{
+                        values,
+                        accesses, 
+                        table,
+                    })) => {
+                        println!("Values | ev: {} mv: {}", values_claim.ev, evaluate_multivar(&values, &values_claim.point));
+                        println!("Access | ev: {} mv: {}", accesses_claim.ev, evaluate_multivar(&accesses, &accesses_claim.point));
+                        println!("Table  | ev: {} mv: {}", table_claim.ev, evaluate_multivar(&table, &table_claim.point));
                 }
                 (_, _) => panic!("unexpected input"),
             }
         }
+        for (idx, (pclaim, input)) in pclaims.iter().zip(data.iter()).enumerate() {
+            match (pclaim, input) {
+                (LookupClaim::Indexed(
+                    IndexedLookupClaim{
+                        accesses: accesses_claim,
+                        table: table_claim,
+                        values: values_claim,
+                        indexes: indexes_claim,
+                    }), LookupInput::Indexed(
+                    IndexedLookupInput{
+                        values,
+                        accesses,
+                        table,
+                        indexes,
+                    })) => {
+                    assert_eq!(values_claim.ev, evaluate_multivar(&values, &values_claim.point), "Values {}", idx);
+                    assert_eq!(accesses_claim.ev, evaluate_multivar(&accesses, &accesses_claim.point), "Access {}", idx);
+                    assert_eq!(table_claim.ev, evaluate_multivar(&table, &table_claim.point), "Table  {}", idx);
+                    assert_eq!(indexes_claim.ev, evaluate_multivar(&indexes, &indexes_claim.point), "Index  {}", idx);
+                }
+                (LookupClaim::Subset(
+                    SubsetLookupClaim{
+                        accesses: accesses_claim,
+                        table: table_claim,
+                        values: values_claim,
+                    }), LookupInput::Subset(
+                    SubsetLookupInput{
+                        values,
+                        accesses,
+                        table,
+                    })) => {
+                    assert_eq!(values_claim.ev, evaluate_multivar(&values, &values_claim.point), "Values {}", idx);
+                    assert_eq!(accesses_claim.ev, evaluate_multivar(&accesses, &accesses_claim.point), "Access {}", idx);
+                    assert_eq!(table_claim.ev, evaluate_multivar(&table, &table_claim.point), "Table  {}", idx);
+                }
+                (_, _) => panic!("unexpected input"),
+            }
+        }
+
         assert_eq!(pclaims, vclaims);
     }
 }
