@@ -652,8 +652,10 @@ mod tests {
     use ark_bn254::Fq as F;
     use ark_std::{test_rng, UniformRand};
     use itertools::repeat_n;
+    use crate::common::algfn::AlgFnSO;
     use crate::common::math::{evaluate_multivar, evaluate_univar};
     use crate::common::wrapper::TFeltUtil;
+    use crate::components::vspark::vspark::VsparkFinalProd;
 
     #[test]
     fn test_pad_iterator() {

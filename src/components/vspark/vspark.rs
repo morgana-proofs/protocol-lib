@@ -62,11 +62,21 @@ pub struct VsparkProverOutput<F: TFelt> {
 }
 
 #[derive(Clone)]
-pub struct VsparkFinalProd<F>(F);
+pub struct VsparkFinalProd<F> {
+    _pd: PhantomData<F>
+}
+
+impl<F> VsparkFinalProd<F> {
+    pub fn new() -> Self {
+        Self {
+            _pd: Default::default(),
+        }
+    }
+}
 
 impl<F: TFelt> AlgFnSO<F> for VsparkFinalProd<F> {
     fn exec(&self, args: &impl Index<usize, Output=F>) -> F {
-        args[0] * args[1] * args[2] * args[3] * (args[4] + self.0)
+        args[0] * args[1] * args[2] * args[3] * args[4]
     }
 
     fn deg(&self) -> usize {
@@ -90,8 +100,8 @@ impl<F: TFelt, Transcript: TArithmeticTranscript<F>> TProtocol<Transcript> for V
         assert_eq!(rs.len(), 0);
 
         let lookup = Logup::new(vec![
-            LookupType::Indexed(self.nx + 1, self.h + self.d),
-            LookupType::Indexed(self.ny + 1, self.h + self.d),
+            LookupType::Indexed(self.nx + 2, self.h + self.d),
+            LookupType::Indexed(self.ny + 2, self.h + self.d),
             LookupType::Indexed(self.d, self.h + self.d),
         ]);
 
@@ -99,7 +109,7 @@ impl<F: TFelt, Transcript: TArithmeticTranscript<F>> TProtocol<Transcript> for V
             if let LookupClaim::Indexed(c) = c {
                 c
             } else {
-                panic!("Invalid LookupType::Indexed {:?}", c)
+                panic!("Invalid LookupType::Subset {:?}", c)
             }
         }).collect_array().unwrap();
 
@@ -116,20 +126,17 @@ impl<F: TFelt, Transcript: TArithmeticTranscript<F>> TProtocol<Transcript> for V
         let e_in_gamma_eval = ctx.read();
 
         let delta0_in_gamma = eq_eval(&vec![F::zero(); self.d], &gamma);
-        let f = VsparkFinalProd(delta0_in_gamma);
+        let f = VsparkFinalProd::new();
 
-        let sumcheck = DenseSumcheck::new(f, self.h);
+        let sumcheck = DenseSumcheck::new(f, self.h + self.d);
 
         let e_claim_sumcheck: SinglePointClaims<F> = sumcheck.verify(ctx, SumClaim(e_in_gamma_eval));
 
-        let mut sumcheck_point = gamma.clone();
-        sumcheck_point.extend(e_claim_sumcheck.point);  // todo: check if order is correct
-
-        let [c_ev_sumcheck, i_pull_ev_sumcheck, x_pull_ev_sumcheck, y_pull_ev_sumcheck] = e_claim_sumcheck.evs.try_into().unwrap();
+        let [c_ev_sumcheck, i_pull_ev_sumcheck, x_pull_ev_sumcheck, y_pull_ev_sumcheck, eq_ev_sumcheck] = e_claim_sumcheck.evs.try_into().unwrap();
         let reducer = MultiDenseEqSumcheck::new(self.h + self.d);
         let mut claims_mess_1 = reducer.verify(ctx, MultiPointEvalClaim::new(
             vec![
-                sumcheck_point,
+                e_claim_sumcheck.point,
                 x_claim.point,
                 y_claim.point,
                 i_claim.point,
@@ -162,15 +169,15 @@ impl<F: TFelt, Transcript: TArithmeticTranscript<F>> TProtocol<Transcript> for V
                 i_acc.point,
             ],
             vec![
-                MultiPointEvalClaimPart::new(1, 3, i_acc.ev),
-                MultiPointEvalClaimPart::new(0, 0, e_claim_lookup.ev),
                 MultiPointEvalClaimPart::new(0, 1, e_ev_old),
                 MultiPointEvalClaimPart::new(0, 2, e_in_gamma_eval),
+                MultiPointEvalClaimPart::new(1, 3, i_acc.ev),
+                MultiPointEvalClaimPart::new(2, 0, e_claim_lookup.ev),
             ],
         ));
 
-        (claims_mess_2.evs[1] - claims_mess_2.evs[2]).require();
-        (claims_mess_2.evs[1] - claims_mess_2.evs[3]).require();
+        (claims_mess_2.evs[0] - claims_mess_2.evs[1]).require();
+        // (claims_mess_2.evs[1] - claims_mess_2.evs[3]).require();
 
         // All these claims should be returned.
         // This is a mess. there are actually like 12 of them.
@@ -220,10 +227,13 @@ impl<F: ComputationalField, Transcript: TArithmeticTranscript<F>> TProverImpl<Tr
             tau_table_y[*idx]
         }).collect::<Vec<_>>();
 
+        let delta_poly = eq_poly(&vec![F::zero(); protocol.d]);
+        let e_adj = e_poly.iter().zip(delta_poly.iter()).map(|(e, d)| *e + d).collect_vec();
+
         let mut accesses_i = e_poly.iter().map(|_| F::zero()).collect::<Vec<_>>();
         let values_i = i_poly.iter().map(|idx| {
             accesses_i[*idx] += F::one();
-            e_poly[*idx]
+            e_adj[*idx]
         }).collect::<Vec<_>>();
 
         assert_eq!(e_poly.len(), 1 << log2(e_poly.len()));
@@ -248,7 +258,7 @@ impl<F: ComputationalField, Transcript: TArithmeticTranscript<F>> TProverImpl<Tr
                 y_poly,
             ),
             LookupInput::indexed_by_usize(
-                e_poly.clone(),
+                e_adj.clone(),
                 accesses_i.clone(),
                 values_i.clone(),
                 i_poly,
@@ -277,33 +287,32 @@ impl<F: ComputationalField, Transcript: TArithmeticTranscript<F>> TProverImpl<Tr
         let e_in_gamma_eval = evaluate_multivar(&e_poly, &gamma);
         ctx.write(&e_in_gamma_eval);
 
-        let delta0_in_gamma = eq_eval(&vec![F::zero(); protocol.d], &gamma);
-        let f = VsparkFinalProd(delta0_in_gamma);
+        let f = VsparkFinalProd::new();
 
         let e_data = vec![
-            eq_poly(&gamma).into_iter().map(|x| repeat_n(x, (1 << protocol.h))).flatten().collect_vec(),
-            c_poly,
+            c_poly.clone(),
+            values_i.clone(),
             tau_values_x.clone(),
             tau_values_y.clone(),
-            values_i.clone(),
+            eq_poly(&gamma).into_iter().map(|x| repeat_n(x, (1 << protocol.h))).flatten().collect_vec(),
         ];
-        println!("{:?}", e_data.iter().map(|v| v.len()).collect_vec());
         let e_output = f.map_so(&e_data.iter().map(|v| v.as_ref()).collect_vec());
+        let e_sum = e_output.iter().chunks(1 << protocol.h).into_iter().map(|c| c.fold(F::zero(), |a, b| a + b)).collect_vec();
+        assert_eq!(e_sum, e_poly.iter().zip(eq_poly(&gamma).iter()).map(|(a, b)| *a * b).collect_vec());
 
         let sumcheck = DenseSumcheck::new(f, protocol.h + protocol.d);
 
         let e_claim_sumcheck: SinglePointClaims<F> = sumcheck.prove::<DenseSumcheck<_,_>>(ctx, SumClaim(e_in_gamma_eval), e_data).0;
 
-        let mut sumcheck_point = gamma.clone();
-        sumcheck_point.extend(e_claim_sumcheck.point);  // todo: check if order is correct
+        let [c_ev_sumcheck, i_pull_ev_sumcheck, x_pull_ev_sumcheck, y_pull_ev_sumcheck, eq_ev_sumcheck] = e_claim_sumcheck.evs.try_into().unwrap();
 
-        let [c_ev_sumcheck, i_pull_ev_sumcheck, x_pull_ev_sumcheck, y_pull_ev_sumcheck] = e_claim_sumcheck.evs.try_into().unwrap();
         let reducer = MultiDenseEqSumcheck::new(protocol.h + protocol.d);
+
         let mut claims_mess_1 = reducer.prove::<MultiDenseEqSumcheck<_>>(
             ctx,
             MultiPointEvalClaim::new(
                 vec![
-                    sumcheck_point,
+                    e_claim_sumcheck.point,
                     x_claim.point,
                     y_claim.point,
                     i_claim.point,
@@ -328,7 +337,7 @@ impl<F: ComputationalField, Transcript: TArithmeticTranscript<F>> TProverImpl<Tr
                 tau_values_y,
                 i_poly_f,
                 values_i,
-                e_output,
+                c_poly,
             ]
         ).0;
 
@@ -348,20 +357,21 @@ impl<F: ComputationalField, Transcript: TArithmeticTranscript<F>> TProverImpl<Tr
                     i_acc.point,
                 ],
                 vec![
-                    MultiPointEvalClaimPart::new(1, 3, i_acc.ev),
-                    MultiPointEvalClaimPart::new(0, 0, e_claim_lookup.ev),
                     MultiPointEvalClaimPart::new(0, 1, e_ev_old),
                     MultiPointEvalClaimPart::new(0, 2, e_in_gamma_eval),
+                    MultiPointEvalClaimPart::new(1, 3, i_acc.ev),
+                    MultiPointEvalClaimPart::new(2, 0, e_claim_lookup.ev),
                 ],
             ),
             vec![
-                accesses_i,
                 e_poly,
+                accesses_i,
+                e_adj,
             ]
         ).0;
 
-        (claims_mess_2.evs[1] - claims_mess_2.evs[2]).require();
-        (claims_mess_2.evs[1] - claims_mess_2.evs[3]).require();
+        (claims_mess_2.evs[0] - claims_mess_2.evs[1]).require();
+        // (claims_mess_2.evs[0] - claims_mess_2.evs[2]).require();
 
         // All these claims should be returned.
         // This is a mess. there are actually like 12 of them.
@@ -390,63 +400,6 @@ mod tests {
     use crate::components::vspark::matrix::{compute_tau_table, VsparkMatrixGroup};
     use crate::protocol::component::TProtocol;
     use crate::transcript::transcript::tests::ManualTestTranscript;
-
-
-    #[test]
-    fn epoly_sumcheck() {
-        let rng = &mut test_rng();
-
-        let (nx, px, ny, py, h, d) = (
-            4,
-            0,
-            4,
-            0,
-            3,
-            3,
-        );
-        let grp = VsparkMatrixGroup::<F>::rand(
-            rng,
-            nx,
-            px,
-            ny,
-            py,
-            h,
-            d,
-        );
-
-
-        let rx = (0..(nx + if px != 0 { 1 - px } else { 0 })).map(|_| F::zero()).collect_vec();
-        let ry = (0..(ny + if py != 0 { 1 - py } else { 0 })).map(|_| F::zero()).collect_vec();
-
-        let tau_table_x = compute_tau_table(nx, px, &rx);
-        let tau_table_y = compute_tau_table(ny, py, &ry);
-
-        let e_poly = grp.e_poly(&tau_table_x, &tau_table_y, d);
-
-        let gamma = (0..d).map(|_| F::zero()).collect_vec();
-
-        let e_in_gamma_eval = evaluate_multivar(&e_poly, &gamma);
-
-        let delta0_in_gamma = eq_eval(&vec![F::zero(); d], &gamma);
-        let f = VsparkFinalProd(delta0_in_gamma);
-
-
-        let parts = vec![
-            eq_poly(&gamma).into_iter().map(|x| repeat_n(x, (1 << h))).flatten().collect_vec(),
-            grp.c_poly(h, d),
-            grp.x_poly(h, d).into_iter().map(|x| tau_table_x[x]).collect_vec(),
-            grp.y_poly(h, d).into_iter().map(|x| tau_table_y[x]).collect_vec(),
-            grp.i_poly(h, d).into_iter().map(|x| e_poly[x]).collect_vec(),
-        ];
-
-        let results = f.map_so(&parts.iter().map(|v| v.as_slice()).collect_vec()).iter()
-            .chunks(1 << h).into_iter().map(|c| {
-                c.sum::<F>()
-            })
-            .collect_vec();;
-
-        assert_eq!(results, e_poly);
-    }
 
     #[test]
     fn test_vspark() {
@@ -505,6 +458,11 @@ mod tests {
         let mut transcript_p = ManualTestTranscript::new((0..1000).map(|_| F::rand(rng)).collect_vec());
         let (output_claims, _) = vspark.prove::<Vspark<_,>>(&mut transcript_p, e_claim_before.clone(), prover_input);
         let proof = transcript_p.end();
+        let mut transcript_v = transcript_p;
+
+        let expected_output_claims = vspark.verify(&mut transcript_v, e_claim_before.clone());
+        transcript_v.end();
+        assert_eq!(output_claims, expected_output_claims);
 
     }
 }

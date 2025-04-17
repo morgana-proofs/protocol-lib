@@ -1,10 +1,10 @@
 use std::iter::once;
 use std::marker::PhantomData;
 use std::ops::Index;
-use itertools::Itertools;
+use itertools::{assert_equal, Itertools};
 use crate::common::algfn::AlgFnSO;
 use crate::common::claims::{EvalClaim, SinglePointClaims, SumClaim};
-use crate::common::math::eq_poly;
+use crate::common::math::{eq_poly, evaluate_multivar};
 use crate::common::wrapper::{ComputationalField, TFelt};
 use crate::components::sumcheck::dense_eq::{eq_eval, DenseSumcheckableSO};
 use crate::components::sumcheck::generic::{SumcheckGenericProverImpl, SumcheckProtocol};
@@ -25,7 +25,7 @@ impl<F: TFelt> MultiDenseEqSumcheck<F> {
 }
 
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct MultiPointEvalClaimPart<F> {
     poly_id: usize,
     point_id: usize,
@@ -155,14 +155,17 @@ impl<F: ComputationalField, Transcript: TArithmeticTranscript<F>> TProverImpl<Tr
     type ProverOutput = ();
 
     fn _prove(protocol: &Self::Verifier, ctx: &mut Transcript, claims: <Self as TProtocol<Transcript>>::ClaimsBefore, advice: Self::ProverInput) -> (<Self as TProtocol<Transcript>>::ClaimsAfter, Self::ProverOutput) {
-
         let MultiPointEvalClaim { points, evals } = claims;
+        points.iter().enumerate().for_each(|(idx, point)| {assert_eq!(point.len(), protocol.num_vars, "Wrong point len idx {}", idx)});
 
-        let (evals, polys): (Vec<(usize, Vec<(usize, MultiPointEvalClaimPart<F>)>)>, Vec<(usize, Vec<Vec<F>>)>) = evals.into_iter().zip_eq(advice.into_iter()).enumerate()
-            .sorted_by(|(_, (a, _)), (_, (b, _))| {a.point_id.cmp(&b.point_id)})
-            .chunk_by(|(_, (e,_))| e.point_id).into_iter()
+        let (evals, polys): (Vec<(usize, Vec<(usize, MultiPointEvalClaimPart<F>)>)>, Vec<(usize, Vec<Vec<F>>)>) = evals.into_iter().enumerate()
+            .sorted_by(|(_, a), (_, b)| {a.point_id.cmp(&b.point_id)})
+            .chunk_by(|(_, e)| e.point_id).into_iter()
             .map(|(key, evs)| {
-                let (claims, polys): (Vec<(usize, MultiPointEvalClaimPart<F>)>, Vec<Vec<F>>) = evs.map(|(idx, (claim, data))| {
+                let (claims, polys): (Vec<(usize, MultiPointEvalClaimPart<F>)>, Vec<Vec<F>>) = evs.map(|(idx, claim)| {
+                    let data = advice[claim.poly_id].clone();
+                    println!("{:?}", claim);
+                    assert_eq!(claim.ev, evaluate_multivar(&data, &points[claim.point_id]), "Wrong input claim for poly {} point {} at index {}", claim.poly_id, claim.point_id, idx);
                     ((idx, claim), data)
                 }).unzip();
                 ((key, claims), (key, polys))
@@ -242,7 +245,8 @@ impl<F: ComputationalField, Transcript: TArithmeticTranscript<F>> TProverImpl<Tr
     }
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use ark_std::rand::RngCore;
+use super::*;
     use crate::transcript::transcript::tests::ManualTestTranscript as ManualTestTranscript;
     use ark_bn254::Fq as F;
     use ark_ff::Field;
@@ -253,39 +257,44 @@ mod tests {
     #[test]
     fn verifier_accepts_prover() {
         let rng = &mut test_rng();
-        let logsize = 6;
-        let points   : Vec<Vec<F>> = (0..7).map(|_| (0..logsize).map(|_| F::rand(rng)).collect()).collect();
-        let polys    : Vec<Vec<F>> = (0..3).map(|_| (0 .. 1 << logsize).map(|_|F::rand(rng)).collect()).collect();
-        let point_ids: Vec<usize>  = (0..polys.len()).map(|i| i).collect();
-        let point_ids: Vec<usize>  = (0..polys.len()).map(|_| rng.gen::<usize>() % points.len()).collect();
+        for _ in 0..20 {
+            let logsize = 6;
+            let num_points = rng.next_u64() as usize % 10 + 5;
+            let num_polys = rng.next_u64() as usize % 10 + 5;
+            let num_evals = rng.next_u64() as usize % 10 + 5;
+            let points: Vec<Vec<F>> = (0..num_points).map(|_| (0..logsize).map(|_| F::rand(rng)).collect()).collect();
+            let polys: Vec<Vec<F>> = (0..num_polys).map(|_| (0..1 << logsize).map(|_| F::rand(rng)).collect()).collect();
+            let polys_ids: Vec<usize> = (0..num_evals).map(|i| rng.gen::<usize>() % polys.len()).collect();
+            let point_ids: Vec<usize> = (0..num_evals).map(|_| rng.gen::<usize>() % points.len()).collect();
 
-        let evals = polys.iter().zip_eq(point_ids.iter()).enumerate().map(|(poly_id, (poly, &point_id))| {
-            MultiPointEvalClaimPart{
-                poly_id,
-                point_id,
-                ev: evaluate_multivar(poly, &points[point_id]),
-            }
-        }).collect_vec();
+            let evals = polys_ids.iter().zip_eq(point_ids.iter()).map(|(&poly_id, &point_id)| {
+                MultiPointEvalClaimPart {
+                    poly_id,
+                    point_id,
+                    ev: evaluate_multivar(&polys[poly_id], &points[point_id]),
+                }
+            }).collect_vec();
 
-        let claim = MultiPointEvalClaim {
-            points: points.clone(),
-            evals,
-        };
+            let claim = MultiPointEvalClaim {
+                points: points.clone(),
+                evals,
+            };
 
-        let sumcheck = MultiDenseEqSumcheck::new(logsize);
+            let sumcheck = MultiDenseEqSumcheck::new(logsize);
 
-        let mut transcript_p = ManualTestTranscript::new((0..1000).map(|_| F::rand(rng)).collect_vec());
+            let mut transcript_p = ManualTestTranscript::new((0..1000).map(|_| F::rand(rng)).collect_vec());
 
-        let (output_claims, _) = sumcheck.prove::<MultiDenseEqSumcheck<_,>>(&mut transcript_p, claim.clone(), polys.clone());
+            let (output_claims, _) = sumcheck.prove::<MultiDenseEqSumcheck<_, >>(&mut transcript_p, claim.clone(), polys.clone());
 
-        let proof = transcript_p.end();
-        let mut transcript_v = transcript_p;
+            let proof = transcript_p.end();
+            let mut transcript_v = transcript_p;
 
-        let expected_output_claims = sumcheck.verify(&mut transcript_v, claim);
+            let expected_output_claims = sumcheck.verify(&mut transcript_v, claim.clone());
 
-        assert_eq!(output_claims, expected_output_claims);
+            assert_eq!(output_claims, expected_output_claims);
 
-        let SinglePointClaims { point : new_point, evs } = output_claims;
-        assert_eq!(polys.iter().map(|poly| evaluate_multivar(poly, &new_point)).collect_vec(), evs);
+            let SinglePointClaims { point: new_point, evs } = output_claims;
+            assert_eq!(claim.evals.iter().map(|part| evaluate_multivar(&polys[part.poly_id], &new_point)).collect_vec(), evs);
+        }
     }
 }
