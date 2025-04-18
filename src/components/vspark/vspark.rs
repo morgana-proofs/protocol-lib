@@ -116,7 +116,7 @@ impl<F: TFelt, Transcript: TArithmeticTranscript<F>> TProtocol<Transcript> for V
         let [a, b, c] = lookup_claims; // RUST, WHY!?!?!?!
         let IndexedLookupClaim{ accesses: x_acc, table: tau_x_claim, values: x_pull, indexes: x_claim } = a;
         let IndexedLookupClaim{ accesses: y_acc, table: tau_y_claim, values: y_pull, indexes: y_claim } = b;
-        let IndexedLookupClaim{ accesses: i_acc, table: e_claim_lookup, values: i_pull, indexes: i_claim } = c;
+        let IndexedLookupClaim{ accesses: i_acc, table: e_adj_claim_lookup, values: i_pull, indexes: i_claim } = c;
 
         (tau_x_claim.ev - Self::compute_tau(self.nx, self.px, &tau_x_claim.point, r_x)).require();
         (tau_y_claim.ev - Self::compute_tau(self.ny, self.py, &tau_y_claim.point, r_y)).require();
@@ -131,8 +131,10 @@ impl<F: TFelt, Transcript: TArithmeticTranscript<F>> TProtocol<Transcript> for V
         let sumcheck = DenseSumcheck::new(f, self.h + self.d);
 
         let e_claim_sumcheck: SinglePointClaims<F> = sumcheck.verify(ctx, SumClaim(e_in_gamma_eval));
-
         let [c_ev_sumcheck, i_pull_ev_sumcheck, x_pull_ev_sumcheck, y_pull_ev_sumcheck, eq_ev_sumcheck] = e_claim_sumcheck.evs.try_into().unwrap();
+        (eq_ev_sumcheck - eq_eval(&gamma, &e_claim_sumcheck.point[self.h..])).require();
+
+
         let reducer = MultiDenseEqSumcheck::new(self.h + self.d);
         let mut claims_mess_1 = reducer.verify(ctx, MultiPointEvalClaim::new(
             vec![
@@ -163,7 +165,7 @@ impl<F: TFelt, Transcript: TArithmeticTranscript<F>> TProtocol<Transcript> for V
 
         let mut claims_mess_2 = reducer2.verify(ctx, MultiPointEvalClaim::new(
             vec![
-                e_claim_lookup.point,
+                e_adj_claim_lookup.point.clone(),
                 t.to_vec(),
                 gamma,
                 i_acc.point,
@@ -171,8 +173,8 @@ impl<F: TFelt, Transcript: TArithmeticTranscript<F>> TProtocol<Transcript> for V
             vec![
                 MultiPointEvalClaimPart::new(0, 1, e_ev_old),
                 MultiPointEvalClaimPart::new(0, 2, e_in_gamma_eval),
+                MultiPointEvalClaimPart::new(0, 0, e_adj_claim_lookup.ev - eq_eval(&vec![F::zero(); self.d], &e_adj_claim_lookup.point)),
                 MultiPointEvalClaimPart::new(1, 3, i_acc.ev),
-                MultiPointEvalClaimPart::new(2, 0, e_claim_lookup.ev),
             ],
         ));
 
@@ -276,7 +278,7 @@ impl<F: ComputationalField, Transcript: TArithmeticTranscript<F>> TProverImpl<Tr
         let [a, b, c] = lookup_claims; // RUST, WHY!?!?!?!
         let IndexedLookupClaim{ accesses: x_acc, table: tau_x_claim, values: x_pull, indexes: x_claim } = a;
         let IndexedLookupClaim{ accesses: y_acc, table: tau_y_claim, values: y_pull, indexes: y_claim } = b;
-        let IndexedLookupClaim{ accesses: i_acc, table: e_claim_lookup, values: i_pull, indexes: i_claim } = c;
+        let IndexedLookupClaim{ accesses: i_acc, table: e_adj_claim_lookup, values: i_pull, indexes: i_claim } = c;
 
         assert!(tau_x_claim.ev == evaluate_multivar(&tau_table_x, &tau_x_claim.point));
         (tau_x_claim.ev - Self::compute_tau(protocol.nx, protocol.px, &tau_x_claim.point, r_x)).require();
@@ -305,6 +307,7 @@ impl<F: ComputationalField, Transcript: TArithmeticTranscript<F>> TProverImpl<Tr
         let e_claim_sumcheck: SinglePointClaims<F> = sumcheck.prove::<DenseSumcheck<_,_>>(ctx, SumClaim(e_in_gamma_eval), e_data).0;
 
         let [c_ev_sumcheck, i_pull_ev_sumcheck, x_pull_ev_sumcheck, y_pull_ev_sumcheck, eq_ev_sumcheck] = e_claim_sumcheck.evs.try_into().unwrap();
+        (eq_ev_sumcheck - eq_eval(&gamma, &e_claim_sumcheck.point[protocol.h..])).require();
 
         let reducer = MultiDenseEqSumcheck::new(protocol.h + protocol.d);
 
@@ -351,7 +354,7 @@ impl<F: ComputationalField, Transcript: TArithmeticTranscript<F>> TProverImpl<Tr
             ctx,
             MultiPointEvalClaim::new(
                 vec![
-                    e_claim_lookup.point,
+                    e_adj_claim_lookup.point.clone(),
                     t.to_vec(),
                     gamma,
                     i_acc.point,
@@ -359,19 +362,18 @@ impl<F: ComputationalField, Transcript: TArithmeticTranscript<F>> TProverImpl<Tr
                 vec![
                     MultiPointEvalClaimPart::new(0, 1, e_ev_old),
                     MultiPointEvalClaimPart::new(0, 2, e_in_gamma_eval),
+                    MultiPointEvalClaimPart::new(0, 0, e_adj_claim_lookup.ev - eq_eval(&vec![F::zero(); protocol.d], &e_adj_claim_lookup.point)),
                     MultiPointEvalClaimPart::new(1, 3, i_acc.ev),
-                    MultiPointEvalClaimPart::new(2, 0, e_claim_lookup.ev),
                 ],
             ),
             vec![
                 e_poly,
                 accesses_i,
-                e_adj,
             ]
         ).0;
 
         (claims_mess_2.evs[0] - claims_mess_2.evs[1]).require();
-        // (claims_mess_2.evs[0] - claims_mess_2.evs[2]).require();
+        (claims_mess_2.evs[0] - claims_mess_2.evs[2]).require();
 
         // All these claims should be returned.
         // This is a mess. there are actually like 12 of them.
