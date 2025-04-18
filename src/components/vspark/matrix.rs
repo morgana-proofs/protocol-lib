@@ -184,12 +184,16 @@ pub fn compute_tau<F: ComputationalField>(n: usize, s: AdmSubset, r: &[F]) -> F 
     partial * full
 }
 
-fn assert_r_size<T>(n: usize, p: usize, r: &[T]) {
+pub fn r_size(n: usize, p: usize) -> usize {
     if p == 0 {
-        assert!(r.len() == n - p);
+        n
     } else {
-        assert!(r.len() == n + 1 - p);
+        n + 1 - p
     }
+}
+
+fn assert_r_size<T>(n: usize, p: usize, r: &[T]) {
+    assert!(r_size(n, p) == r.len());
 }
 
 pub fn compute_tau_table<F: ComputationalField>(n: usize, p: usize, r: &[F]) -> Vec<F> {
