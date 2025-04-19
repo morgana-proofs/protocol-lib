@@ -16,9 +16,11 @@ use crate::components::sumcheck::dense_eq::eq_eval;
 use crate::components::sumcheck::generic::SumcheckProtocol;
 use crate::components::sumcheck::multi_dense_eq::{MultiDenseEqSumcheck, MultiPointEvalClaim, MultiPointEvalClaimPart};
 use crate::components::sumcheck::sumcheckable::Sumcheckable;
-use crate::components::vspark::matrix::{compute_tau_at_point, compute_tau_table, r_size};
+use crate::components::vspark::matrix::{tau::no_decompositon::at_point, tau::no_decompositon::table, r_size, tau};
 use crate::transcript::transcript::{TArithmeticTranscript, TTranscriptInterface};
 use crate::protocol::component::{TProtocol, TProverImpl};
+use tracing::{info_span, instrument};
+
 
 pub struct Vspark<F: TFelt> {
     d: usize,  // matrix number logsize
@@ -44,7 +46,7 @@ impl<F: TFelt> Vspark<F> {
     }
 
     fn compute_tau(n: usize, p: usize, x: &[F], r: &[F]) -> F {
-        compute_tau_at_point(n, p, x, r)
+        tau::no_decompositon::at_point(n, p, x, r)
     }
 }
 
@@ -92,6 +94,7 @@ impl<F: TFelt, Transcript: TArithmeticTranscript<F>> TProtocol<Transcript> for V
     type ClaimsBefore = EvalClaim<F>;
     type ClaimsAfter = (SinglePointClaims<F>, SinglePointClaims<F>, EvalClaim<F>, EvalClaim<F>);
 
+    #[instrument(name="VSpark::verify", level="info", skip_all)]
     fn verify(&self, ctx: &mut Transcript, claims: Self::ClaimsBefore) -> Self::ClaimsAfter {
         let EvalClaim { ev: e_ev_old, point: e_point_old } = claims;
         let (t, rs) = e_point_old.split_at(self.d);
@@ -199,6 +202,7 @@ impl<F: ComputationalField, Transcript: TArithmeticTranscript<F>> TProverImpl<Tr
     type ProverInput = VsparkProverInput<F>;
     type ProverOutput = ();
 
+    #[instrument(name="VSpark::prove", level="info", skip_all)]
     fn _prove(protocol: &Self::Verifier, ctx: &mut Transcript, claims: <Self::Verifier as TProtocol<Transcript>>::ClaimsBefore, advice: Self::ProverInput) -> (<Self::Verifier as TProtocol<Transcript>>::ClaimsAfter, Self::ProverOutput) {
         let VsparkProverInput{ e_poly, c_poly, i_poly, x_poly, y_poly, _pd } = advice;
         let EvalClaim { ev: e_ev_old, point: e_point_old } = claims;
@@ -207,13 +211,15 @@ impl<F: ComputationalField, Transcript: TArithmeticTranscript<F>> TProverImpl<Tr
         let (r_y, rs) = rs.split_at(r_size(protocol.ny, protocol.py));
         assert_eq!(rs.len(), 0);
 
+
+        let span = info_span!("lookup-inputs").entered();
         let lookup = Logup::new(vec![
             LookupType::Indexed(protocol.nx + 2, protocol.h + protocol.d),
             LookupType::Indexed(protocol.ny + 2, protocol.h + protocol.d),
             LookupType::Indexed(protocol.d, protocol.h + protocol.d),
         ]);
 
-        let tau_table_x = compute_tau_table(protocol.nx, protocol.px, r_x);
+        let tau_table_x = tau::no_decompositon::table(protocol.nx, protocol.px, r_x);
         assert_eq!(tau_table_x.len(), 1 << protocol.nx + 2);
         let mut tau_accesses_x = tau_table_x.iter().map(|_| F::zero()).collect::<Vec<_>>();
         let tau_values_x = x_poly.iter().map(|idx| {
@@ -221,7 +227,7 @@ impl<F: ComputationalField, Transcript: TArithmeticTranscript<F>> TProverImpl<Tr
             tau_table_x[*idx]
         }).collect::<Vec<_>>();
 
-        let tau_table_y = compute_tau_table(protocol.ny, protocol.py, r_y);
+        let tau_table_y = tau::no_decompositon::table(protocol.ny, protocol.py, r_y);
         assert_eq!(tau_table_y.len(), 1 << protocol.ny + 2);
         let mut tau_accesses_y = tau_table_y.iter().map(|_| F::zero()).collect::<Vec<_>>();
         let tau_values_y = y_poly.iter().map(|idx| {
@@ -267,6 +273,7 @@ impl<F: ComputationalField, Transcript: TArithmeticTranscript<F>> TProverImpl<Tr
             ),
         ];
 
+        span.exit();
         let lookup_claims: [_; 3] = lookup.prove::<Logup<_>>(ctx, (), lookup_advice).0.into_iter().map(|c| {
             if let LookupClaim::Indexed(c) = c {
                 c
@@ -283,6 +290,7 @@ impl<F: ComputationalField, Transcript: TArithmeticTranscript<F>> TProverImpl<Tr
         (tau_x_claim.ev - Self::compute_tau(protocol.nx, protocol.px, &tau_x_claim.point, r_x)).require();
         (tau_y_claim.ev - Self::compute_tau(protocol.ny, protocol.py, &tau_y_claim.point, r_y)).require();
 
+        let span = info_span!("final-prod-inputs").entered();
         let gamma = (0..protocol.d).map(|_| ctx.challenge()).collect_vec();
 
         let e_in_gamma_eval = evaluate_multivar(&e_poly, &gamma);
@@ -302,6 +310,7 @@ impl<F: ComputationalField, Transcript: TArithmeticTranscript<F>> TProverImpl<Tr
         assert_eq!(e_sum, e_poly.iter().zip(eq_poly(&gamma).iter()).map(|(a, b)| *a * b).collect_vec());
 
         let sumcheck = DenseSumcheck::new(f, protocol.h + protocol.d);
+        span.exit();
 
         let e_claim_sumcheck: SinglePointClaims<F> = sumcheck.prove::<DenseSumcheck<_,_>>(ctx, SumClaim(e_in_gamma_eval), e_data).0;
 
@@ -392,21 +401,38 @@ mod tests {
     use crate::components::vspark::vspark::{Vspark, VsparkProverInput};
     use ark_bn254::Fq as F;
     use ark_std::UniformRand;
+    use tracing::info_span;
     use crate::common::claims::EvalClaim;
     use crate::common::math::evaluate_multivar;
-    use crate::components::vspark::matrix::{compute_tau_table, r_size, VsparkMatrixGroup};
+    use crate::components::vspark::matrix::{tau::no_decompositon::table, r_size, VsparkMatrixGroup};
     use crate::protocol::component::TProtocol;
     use crate::transcript::transcript::tests::ManualTestTranscript;
 
+    use tracing::level_filters::LevelFilter;
+    use tracing_subscriber::{EnvFilter, fmt, prelude::*, reload, Registry, Layer};
+    use tracing_subscriber::fmt::format::FmtSpan;
+    use tracing_subscriber::layer::{Layered, SubscriberExt};
+    use tracing_subscriber::util::{SubscriberInitExt, TryInitError};
+
     #[test]
     fn test_vspark() {
+        // Create a tracing layer with the configured tracer
+        let tracer = tracing_subscriber::registry();
+        let tracer = tracer
+            .with(EnvFilter::builder()
+                .with_default_directive(LevelFilter::INFO.into())
+                .from_env_lossy())
+            .with(tracing_span_tree::span_tree().aggregate(true))
+            .init();
+
         let rng = &mut ark_std::test_rng();
+        let span = info_span!("test").entered();
         for _ in 0..10 {
             let (nx, px, ny, py, h, d) = (
+                5,
+                3,
+                5,
                 4,
-                2,
-                4,
-                0,
                 3,
                 3,
             );
@@ -435,8 +461,8 @@ mod tests {
             r.extend_from_slice(&rx);
             r.extend_from_slice(&ry);
 
-            let tau_table_x = compute_tau_table(nx, px, &rx);
-            let tau_table_y = compute_tau_table(ny, py, &ry);
+            let tau_table_x = table(nx, px, &rx);
+            let tau_table_y = table(ny, py, &ry);
             let e_poly = grp.e_poly(&tau_table_x, &tau_table_y, d);
 
             let e_claim_before = EvalClaim {
@@ -446,10 +472,10 @@ mod tests {
 
             let prover_input = VsparkProverInput {
                 e_poly: e_poly.clone(),
-                c_poly: grp.c_poly(d, h),
-                i_poly: grp.i_poly(d, h),
-                x_poly: grp.x_poly(d, h),
-                y_poly: grp.y_poly(d, h),
+                c_poly: grp.c_poly(h, d),
+                i_poly: grp.i_poly(h, d),
+                x_poly: grp.x_poly(h, d),
+                y_poly: grp.y_poly(h, d),
                 _pd: Default::default(),
             };
 

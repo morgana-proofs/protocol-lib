@@ -1,5 +1,6 @@
 use std::marker::PhantomData;
 use itertools::Itertools;
+use tracing::instrument;
 use crate::common::claims::SinglePointClaims;
 use crate::common::wrapper::TFelt;
 use crate::transcript::transcript::TArithmeticTranscript;
@@ -142,6 +143,7 @@ impl<F: TFelt, Dialect: TArithmeticTranscript<F>> TProverImpl<Dialect> for Split
     type ProverInput = ();
     type ProverOutput = ();
 
+    #[instrument(name="SplitAt::prove", level="info", skip_all)]
     fn _prove(protocol: &Self::Verifier, ctx: &mut Dialect, claims: <Self::Verifier as TProtocol<Dialect>>::ClaimsBefore, advice: Self::ProverInput) -> (<Self::Verifier as TProtocol<Dialect>>::ClaimsAfter, Self::ProverOutput) {
         (protocol.verify(ctx, claims), ())
     }

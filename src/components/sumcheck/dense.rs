@@ -1,5 +1,6 @@
 use std::marker::PhantomData;
 use itertools::Itertools;
+use tracing::instrument;
 use crate::common::algfn::AlgFnSO;
 use crate::common::claims::{EvalClaim, SinglePointClaims, SumClaim};
 use crate::common::wrapper::{ComputationalField, TFelt};
@@ -41,6 +42,7 @@ impl<F: ComputationalField, Fun: AlgFnSO<F>, Transcript: TArithmeticTranscript<F
     type ProverInput = Vec<Vec<F>>;
     type ProverOutput = ();
 
+    #[instrument(name="DenseSumCheck::prove", level="info", skip_all)]
     fn _prove(protocol: &Self::Verifier, ctx: &mut Transcript, claims: <Self::Verifier as TProtocol<Transcript>>::ClaimsBefore, advice: Self::ProverInput) -> (<Self::Verifier as TProtocol<Transcript>>::ClaimsAfter, Self::ProverOutput) {
         let generic_protocol_config = SumcheckProtocol::new(protocol.f.clone(), protocol.num_vars);
 

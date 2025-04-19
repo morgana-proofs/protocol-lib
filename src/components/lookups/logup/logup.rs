@@ -2,6 +2,7 @@ use crate::common::algfn::AlgFnUtils;
 use std::marker::PhantomData;
 use ark_ff::PrimeField;
 use itertools::Itertools;
+use tracing::instrument;
 use crate::common::algfn::AlgFn;
 use crate::common::claims::{EvalClaim, SinglePointClaims, SumClaim};
 use crate::common::math::{evaluate_index_poly, evaluate_multivar};
@@ -219,6 +220,7 @@ impl<F: ComputationalField, Transcript: TArithmeticTranscript<F>> TProverImpl<Tr
     type ProverInput = Vec<[Vec<F>; 2]>;
     type ProverOutput = ();
 
+    #[instrument(name="LogupMainphase::prove", level="info", skip_all)]
     fn _prove(protocol: &Self::Verifier, ctx: &mut Transcript, claims: <Self::Verifier as TProtocol<Transcript>>::ClaimsBefore, advice: Self::ProverInput) -> (<Self::Verifier as TProtocol<Transcript>>::ClaimsAfter, Self::ProverOutput) {
         let f = LogupLayerFn::<F>::new();
 
@@ -459,6 +461,7 @@ impl<F: ComputationalField, Transcript: TArithmeticTranscript<F>> TProverImpl<Tr
     type ProverInput = Vec<LookupInput<F>>;
     type ProverOutput = ();
 
+    #[instrument(name="Logup::prove", level="info", skip_all)]
     fn _prove(protocol: &Self::Verifier, ctx: &mut Transcript, claims: <Self::Verifier as TProtocol<Transcript>>::ClaimsBefore, advice: Self::ProverInput) -> (<Self::Verifier as TProtocol<Transcript>>::ClaimsAfter, Self::ProverOutput) {
         let max_table_size = advice.iter().filter_map(|x| match x {
             LookupInput::Indexed(IndexedLookupInput{ table, .. }) => Some(table.len()),
@@ -681,14 +684,14 @@ mod tests {
         for (claim, input) in vclaims.iter().zip(data.iter()) {
             match (claim, input) {
                 (LookupClaim::Indexed(
-                    IndexedLookupClaim{ 
-                        accesses: accesses_claim, 
-                        table: table_claim, 
-                        values: values_claim, 
-                        indexes: indexes_claim, 
+                    IndexedLookupClaim{
+                        accesses: accesses_claim,
+                        table: table_claim,
+                        values: values_claim,
+                        indexes: indexes_claim,
                     }), LookupInput::Indexed(
                     IndexedLookupInput{
-                        values, 
+                        values,
                         accesses,
                         table,
                         indexes,

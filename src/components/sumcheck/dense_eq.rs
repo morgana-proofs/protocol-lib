@@ -3,6 +3,7 @@ use std::marker::PhantomData;
 use std::ops::Index;
 use itertools::Itertools;
 use rayon::current_num_threads;
+use tracing::instrument;
 use crate::common::algfn::{AlgFn, AlgFnSO};
 use crate::common::claims::{EvalClaim, SinglePointClaims, SumClaim};
 use crate::common::math::{bind_dense_poly, eq_poly, evaluate_univar, from_evals};
@@ -217,6 +218,7 @@ impl<F: ComputationalField, Fun: AlgFn<F>, Transcript: TArithmeticTranscript<F>>
     type ProverInput = Vec<Vec<F>>;
     type ProverOutput = ();
 
+    #[instrument(name="DenseEqSumcheck::prove", level="info", skip_all)]
     fn _prove(protocol: &Self::Verifier, ctx: &mut Transcript, claims: <Self as TProtocol<Transcript>>::ClaimsBefore, advice: Self::ProverInput) -> (<Self as TProtocol<Transcript>>::ClaimsAfter, Self::ProverOutput) {
         let gamma = ctx.challenge();
         let SinglePointClaims { point: input_point, evs } = claims;

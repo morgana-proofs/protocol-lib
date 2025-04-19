@@ -5,6 +5,7 @@ use ark_std::iterable::Iterable;
 use ark_std::{log2, UniformRand};
 use ark_std::rand::{Rng, RngCore};
 use itertools::Itertools;
+use tracing::instrument;
 use crate::common::algfn::AlgFnUtils;
 use crate::common::math::{eq_poly, evaluate_multivar, evaluate_univar};
 use crate::common::wrapper::{ComputationalField, TFelt};
@@ -169,20 +170,412 @@ impl AdmSubset {
     }
 }
 
+pub mod tau {
+    pub mod no_decompositon {
+        use itertools::Itertools;
+        use tracing::instrument;
+        use crate::common::wrapper::{ComputationalField, TFelt, TFeltUtil};
+        use crate::components::sumcheck::dense_eq::eq_eval;
+        use crate::components::vspark::matrix::{assert_r_size, extend_r, hybrid_eq_eval, AdmSubset};
 
-pub fn compute_tau<F: ComputationalField>(n: usize, s: AdmSubset, r: &[F]) -> F {
-    let mut partial =  F::one();
-    if s.k == 0 {
-        partial = r[0].static_pow(&[s.u as u64]);
+        pub fn for_subset<F: ComputationalField>(n: usize, s: AdmSubset, r: &[F]) -> F {
+            let mut partial =  F::one();
+            if s.k == 0 {
+                partial = r[0].static_pow(&[s.u as u64]);
+            }
+
+            let trailing_width = n - s.k - s.p;
+            let full = eq_eval(
+                &r[(r.len() - trailing_width)..(r.len()- trailing_width + s.a_width)],
+                &(0..s.a_width).map(|i| F::from_const(((s.a >> i) & 1) as u64)).collect_vec()
+            );
+            partial * full
+        }
+
+        #[instrument(level = "debug", skip_all)]
+        pub fn table<F: ComputationalField>(n: usize, p: usize, r: &[F]) -> Vec<F> {
+            assert_r_size(n, p, r);
+            (0usize..(1 << (n + 2)))
+                .map(|i|
+                    AdmSubset::decode(n, p, i).map_or(F::zero(), |s| for_subset(n, s, r))
+                )
+                .collect_vec()
+        }
+
+
+        pub fn at_point<F: TFelt>(n: usize, p: usize, x: &[F], r: &[F]) -> F {
+            assert!(x.len() == n + 2);
+            let r = extend_r(n, p, r);
+            assert_eq!(r.len(), n);
+
+            let mut partials = x[0];
+            partials *= hybrid_eq_eval(&r[0..p], &x[1..(p + 1)]);
+            let mut partials_border_sum = F::zero();
+            for m in (p + 1)..(n + 2) {
+                let mut term = eq_eval(&r[p..(m - 1)], &x[(p + 1)..m]);
+                term *= x[m];
+                term *= x[(m + 1)..].iter().map(|x| F::one() - x).fold(F::one(), |acc, x| acc * x);
+                partials_border_sum += term;
+            }
+            partials *= partials_border_sum;
+
+            let mut fulls = F::zero();
+
+            // k = 2; (1 - x_0)
+            for k in 1..(n + 1 - p) {
+                let mut tmp = (0..k).map(|i| F::one() - x[i]).fold(F::one(), |acc, x| acc * x);
+                tmp = tmp * x[k];
+                tmp = tmp * (k + 1..k + p + 1).map(|i| F::one() - x[i]).fold(F::one(), |acc, x| acc * x);
+                let mut border_sum = F::zero();
+                for m in (k + p + 1)..(n + 2) {
+                    let mut term = eq_eval(&x[(k + p + 1)..m], &r[(k + p)..(m - 1)]);
+                    term *= x[m];
+                    term *= x[(m + 1)..].iter().map(|x| F::one() - x).fold(F::one(), |acc, x| acc * x);
+                    border_sum += term;
+                }
+                tmp *= border_sum;
+                fulls = fulls + tmp;
+            }
+            println!("{:?}, {:?}", partials, fulls);
+            partials + fulls
+        }
     }
+    pub mod sqrt_decomposition {
+        use crate::common::wrapper::TFelt;
 
-    let trailing_width = n - s.k - s.p;
-    let full = eq_eval(
-        &r[(r.len() - trailing_width)..(r.len()- trailing_width + s.a_width)],
-        &(0..s.a_width).map(|i| F::from_const(((s.a >> i) & 1) as u64)).collect_vec()
-    );
-    partial * full
+
+        mod at_point_parts {
+            use crate::common::wrapper::TFelt;
+            use crate::components::sumcheck::dense_eq::eq_eval;
+            use crate::components::vspark::matrix::{extend_r, hybrid_eq_eval};
+
+            fn delta<F: TFelt>(x: &[F]) -> F {
+                eq_eval(&vec![F::zero(); x.len()], &x)
+            }
+            
+            pub fn full_leq_l<F: TFelt>(n: usize, p: usize, mid: usize, x: &[F], r: &[F]) -> F {
+                let mut fulls = F::zero();
+
+                for k in 0..(mid - p) {
+                    let mut tmp = delta(&x[0..k]);
+                    tmp = tmp * x[k];
+                    tmp *= delta(&x[k + 1..k + p + 1]);
+                    let mut border_sum = F::zero();
+                    for m in (k + p + 1)..mid {
+                        let mut term = eq_eval(&x[(k + p + 1)..m], &r[(k + p)..(m - 1)]);
+                        term *= x[m];
+                        term *= delta(&x[(m + 1)..mid]);
+                        border_sum += term;
+                    }
+                    tmp *= border_sum;
+                    fulls = fulls + tmp;
+                }
+                fulls
+            }
+            pub fn full_leq_r<F: TFelt>(n: usize, p: usize, mid: usize, x: &[F], r: &[F]) -> F {
+                delta(&x[mid..])
+            }
+            pub fn full_mid_l<F: TFelt>(n: usize, p: usize, mid: usize, x: &[F], r: &[F]) -> F {
+                assert!(p == 0, "not yet implemented for other cases");
+                // k < mid < m
+                assert!(x.len() == n + 2);
+                let r = extend_r(n, p, r);
+                assert_eq!(r.len(), n);
+
+                let mut fulls = F::zero();
+                for k in 0..mid {
+                    let mut tmp = delta(&x[0..k]);
+                    tmp = tmp * x[k];
+                    tmp *= delta(&x[k + 1..k + p + 1]);
+                    tmp *= eq_eval(&x[(k + p + 1)..mid], &r[(k + p)..(mid - 1)]);
+                    fulls = fulls + tmp;
+                }
+                fulls
+            }
+            pub fn full_mid_r<F: TFelt>(n: usize, p: usize, mid: usize, x: &[F], r: &[F]) -> F {
+                assert!(x.len() == n + 2);
+                let r = extend_r(n, p, r);
+                assert_eq!(r.len(), n);
+
+                let mut fulls = F::zero();
+                for m in mid..(n + 2) {
+                    let mut term = eq_eval(&x[mid..m], &r[(mid - 1)..(m - 1)]);
+                    term *= x[m];
+                    term *= delta(&x[(m + 1)..]);
+                    fulls += term;
+                }
+                fulls
+            }
+            pub fn full_geq_l<F: TFelt>(n: usize, p: usize, mid: usize, x: &[F], r: &[F]) -> F {
+                delta(&x[..mid])
+            }
+            pub fn full_geq_r<F: TFelt>(n: usize, p: usize, mid: usize, x: &[F], r: &[F]) -> F {
+                let mut fulls = F::zero();
+
+                for k in mid..(n + 1 - p) {
+                    let mut tmp = delta(&x[0..k]);
+                    tmp = tmp * x[k];
+                    tmp *= delta(&x[k + 1..k + p + 1]);
+                    let mut border_sum = F::zero();
+                    for m in (k + p + 1)..n + 2 {
+                        let mut term = eq_eval(&x[(k + p + 1)..m], &r[(k + p)..(m - 1)]);
+                        term *= x[m];
+                        term *= delta(&x[(m + 1)..]);
+                        border_sum += term;
+                    }
+                    tmp *= border_sum;
+                    fulls = fulls + tmp;
+                }
+                fulls
+            }
+            pub fn part_leq_l<F: TFelt>(n: usize, p: usize, mid: usize, x: &[F], r: &[F]) -> F {
+                // 1 + p < m < mid
+                assert!(x.len() == n + 2);
+                let r = extend_r(n, p, r);
+                assert_eq!(r.len(), n);
+
+                let mut partials = x[0];
+                partials *= hybrid_eq_eval(&r[0..p], &x[1..(p + 1)]);
+                let mut partials_border_sum = F::zero();
+                for m in (p + 1)..mid {
+                    let mut term = eq_eval(&r[p..(m - 1)], &x[(p + 1)..m]);
+                    term *= x[m];
+                    term *= delta(&x[m + 1..mid]);
+                    partials_border_sum += term;
+                }
+                partials *= partials_border_sum;
+                partials
+            }
+            pub fn part_leq_r<F: TFelt>(n: usize, p: usize, mid: usize, x: &[F], r: &[F]) -> F {
+                delta(&x[mid..])
+            }
+            pub fn part_mid_l<F: TFelt>(n: usize, p: usize, mid: usize, x: &[F], r: &[F]) -> F {
+                // 1 + p < mid < m
+                todo!()
+            }
+            pub fn part_mid_r<F: TFelt>(n: usize, p: usize, mid: usize, x: &[F], r: &[F]) -> F {
+                todo!()
+            }
+            pub fn part_geq_l<F: TFelt>(n: usize, p: usize, mid: usize, x: &[F], r: &[F]) -> F {
+                // mid < 1 + p < m
+                assert!(x.len() == n + 2);
+                let r = extend_r(n, p, r);
+                assert_eq!(r.len(), n);
+
+                let mut partials = x[0];
+                partials *= hybrid_eq_eval(&r[0..mid], &x[1..(mid + 1)]);
+                partials
+            }
+            pub fn part_geq_r<F: TFelt>(n: usize, p: usize, mid: usize, x: &[F], r: &[F]) -> F {
+                if mid > p {
+                    return F::zero();
+                }
+                assert!(x.len() == n + 2);
+                let r = extend_r(n, p, r);
+                assert_eq!(r.len(), n);
+
+                let mut partials = hybrid_eq_eval(&r[mid..p], &x[1+mid..(p + 1)]);
+                let mut partials_border_sum = F::zero();
+                for m in (p + 1)..(n + 2) {
+                    let mut term = eq_eval(&r[p..(m - 1)], &x[(p + 1)..m]);
+                    term *= x[m];
+                    term *= x[(m + 1)..].iter().map(|x| F::one() - x).fold(F::one(), |acc, x| acc * x);
+                    partials_border_sum += term;
+                }
+                partials *= partials_border_sum;
+                partials
+            }
+
+            mod tests {
+                use crate::components::vspark::matrix::tau::no_decompositon;
+                use super::*;
+                use ark_bn254::Fq as F;
+                use ark_std::{test_rng, UniformRand};
+                use itertools::Itertools;
+                use crate::common::wrapper::TFeltUtil;
+                use crate::components::vspark::matrix::r_size;
+
+
+                mod full {
+                    use super::*;
+                    #[test]
+                    fn test_full_leq() {
+                        let rng = &mut test_rng();
+                        let n = 6;
+                        let p = 0;
+                        let m = 6;
+                        for _ in 0..100 {
+                            let x = vec![
+                                F::rand(rng),
+                                F::rand(rng),
+                                F::rand(rng),
+                                F::rand(rng),
+                                F::rand(rng),
+                                F::rand(rng),
+                                F::zero(),
+                                F::zero(),
+                            ];
+                            let r = (0..r_size(n, p)).map(|_| F::rand(rng)).collect_vec();
+                            let expected = no_decompositon::at_point(n, p, &x, &r);
+                            let l = full_leq_l(n, p, m, &x, &r);
+                            let r = full_leq_r(n, p, m, &x, &r);
+                            println!("{} {}, {}", l, r, expected);
+                            let result = l * r;
+                            assert_eq!(result, expected);
+                        }
+                    }
+
+                    #[test]
+                    fn test_full_mid() {
+                        let rng = &mut test_rng();
+                        let n = 6;
+                        let p = 0;
+                        let m = 4;
+                        for _ in 0..100 {
+                            let x = vec![
+                                F::one(),
+                                F::rand(rng),
+                                F::rand(rng),
+                                F::rand(rng),
+                                F::rand(rng),
+                                F::rand(rng),
+                                F::rand(rng),
+                                F::one(),
+                            ];
+                            let r = (0..r_size(n, p)).map(|_| F::rand(rng)).collect_vec();
+                            let expected = no_decompositon::at_point(n, p, &x, &r);
+                            let l = full_mid_l(n, p, m, &x, &r);
+                            let r = full_mid_r(n, p, m, &x, &r);
+                            println!("{} {}, {}", l, r, expected);
+                            let result = l * r;
+                            assert_eq!(result, expected);
+                        }
+                    }
+                    #[test]
+                    fn test_full_geq() {
+                        let rng = &mut test_rng();
+                        let n = 6;
+                        let p = 0;
+                        let m = 2;
+                        for _ in 0..100 {
+                            let x = vec![
+                                F::zero(),
+                                F::zero(),
+                                F::rand(rng),
+                                F::rand(rng),
+                                F::rand(rng),
+                                F::rand(rng),
+                                F::rand(rng),
+                                F::rand(rng),
+                            ];
+                            let r = (0..r_size(n, p)).map(|_| F::rand(rng)).collect_vec();
+                            let expected = no_decompositon::at_point(n, p, &x, &r);
+                            let l = full_geq_l(n, p, m, &x, &r);
+                            let r = full_geq_r(n, p, m, &x, &r);
+                            println!("{} {}, {}", l, r, expected);
+                            let result = l * r;
+                            assert_eq!(result, expected);
+                        }
+                    }
+                }
+
+                mod partial {
+                    use super::*;
+                    #[test]
+                    fn test_part_leq() {
+                        let rng = &mut test_rng();
+                        let n = 6;
+                        let p = 4;
+                        let m = 6;
+                        for _ in 0..100 {
+                            let x = vec![
+                                F::one(),
+                                F::rand(rng),
+                                F::rand(rng),
+                                F::rand(rng),
+                                F::rand(rng),
+                                F::rand(rng),
+                                F::zero(),
+                                F::zero(),
+                            ];
+                            let r = (0..r_size(n, p)).map(|_| F::rand(rng)).collect_vec();
+                            let expected = no_decompositon::at_point(n, p, &x, &r);
+                            let l = part_leq_l(n, p, m, &x, &r);
+                            let r = part_leq_r(n, p, m, &x, &r);
+                            println!("{} {}, {}", l, r, expected);
+                            let result = l * r;
+                            assert_eq!(result, expected);
+                        }
+                    }
+
+                    #[test]
+                    fn test_part_geq() {
+                        let rng = &mut test_rng();
+                        let n = 6;
+                        let p = 4;
+                        let m = 3;
+                        for _ in 0..100 {
+                            let x = vec![
+                                F::one(),
+                                F::rand(rng),
+                                F::rand(rng),
+                                F::rand(rng),
+                                F::rand(rng),
+                                F::rand(rng),
+                                F::zero(),
+                                F::zero(),
+                            ];
+                            let r = (0..r_size(n, p)).map(|_| F::rand(rng)).collect_vec();
+                            let expected = no_decompositon::at_point(n, p, &x, &r);
+                            let l = part_geq_l(n, p, m, &x, &r);
+                            let r = part_geq_r(n, p, m, &x, &r);
+                            println!("{} {}, {}", l, r, expected);
+                            let result = l * r;
+                            assert_eq!(result, expected);
+                        }
+                    }
+                }
+            }
+        }
+        pub fn at_point<F: TFelt>(n: usize, p: usize, mid: usize, x: &[F], r: &[F]) -> F {
+            assert!(p == 0, "Not yet implemented");
+            at_point_parts::full_leq_l(n, p, mid, x, r) * at_point_parts::full_leq_r(n, p, mid, x, r) +
+            at_point_parts::full_mid_l(n, p, mid, x, r) * at_point_parts::full_mid_r(n, p, mid, x, r) +
+            at_point_parts::full_geq_l(n, p, mid, x, r) * at_point_parts::full_geq_r(n, p, mid, x, r)
+        }
+
+        mod tests {
+            use ark_bn254::Fq as F;
+            use ark_std::{test_rng, UniformRand};
+            use itertools::Itertools;
+            use crate::common::wrapper::TFeltUtil;
+            use crate::components::vspark::matrix::r_size;
+            use crate::components::vspark::matrix::tau::no_decompositon;
+            use crate::components::vspark::matrix::tau::sqrt_decomposition;
+
+            #[test]
+            fn test_at_point() {
+                let rng = &mut test_rng();
+                let n = 6;
+                let p = 0;
+                let m = 3;
+                for _ in 0..100 {
+                    let mut x = (0..n + 2).map(|_| F::rand(rng)).collect_vec();
+                    x[0] = F::zero();
+                    x[1] = F::zero();
+                    // x[2] = F::zero();
+                    x[n + 1] = F::zero();
+                    let r = (0..r_size(n, p)).map(|_| F::rand(rng)).collect_vec();
+                    let expected = no_decompositon::at_point(n, p, &x, &r);
+                    let result = sqrt_decomposition::at_point(n, p, m, &x, &r);
+                    assert_eq!(result, expected);
+                }
+            }
+        }
+    }
 }
+
+
 
 pub fn r_size(n: usize, p: usize) -> usize {
     if p == 0 {
@@ -194,15 +587,6 @@ pub fn r_size(n: usize, p: usize) -> usize {
 
 fn assert_r_size<T>(n: usize, p: usize, r: &[T]) {
     assert!(r_size(n, p) == r.len());
-}
-
-pub fn compute_tau_table<F: ComputationalField>(n: usize, p: usize, r: &[F]) -> Vec<F> {
-    assert_r_size(n, p, r);
-    (0usize..(1 << (n + 2)))
-        .map(|i|
-            AdmSubset::decode(n, p, i).map_or(F::zero(), |s| compute_tau(n, s, r))
-        )
-        .collect_vec()
 }
 
 
@@ -227,41 +611,6 @@ fn extend_r<F: TFelt>(n: usize, p: usize, r: &[F]) -> Vec<F> {
     r
 }
 
-pub fn compute_tau_at_point<F: TFelt>(n: usize, p: usize, x: &[F], r: &[F]) -> F {
-    assert!(x.len() == n + 2);
-    let r = extend_r(n, p, r);
-    assert_eq!(r.len(), n);
-
-    let mut partials = x[0];
-    partials *= hybrid_eq_eval(&r[0..p], &x[1..(p + 1)]);
-    let mut partials_border_sum = F::zero();
-    for m in (p + 1)..(n + 2) {
-        let mut term = eq_eval(&r[p..(m - 1)], &x[(p + 1)..m]);
-        term *= x[m];
-        term *= x[(m + 1)..].iter().map(|x| F::one() - x).fold(F::one(), |acc, x| acc * x);
-        partials_border_sum += term;
-    }
-    partials *= partials_border_sum;
-
-    let mut fulls = F::zero();
-
-    // k = 2; (1 - x_0)
-    for k in 1..(n + 1 - p) {
-        let mut tmp = (0..k).map(|i| F::one() - x[i]).fold(F::one(), |acc, x| acc * x);
-        tmp = tmp * x[k];
-        tmp = tmp * (k + 1..k + p + 1).map(|i| F::one() - x[i]).fold(F::one(), |acc, x| acc * x);
-        let mut border_sum = F::zero();
-        for m in (k + p + 1)..(n + 2) {
-            let mut term = eq_eval(&x[(k + p + 1)..m], &r[(k + p)..(m - 1)]);
-            term *= x[m];
-            term *= x[(m + 1)..].iter().map(|x| F::one() - x).fold(F::one(), |acc, x| acc * x);
-            border_sum += term;
-        }
-        tmp *= border_sum;
-        fulls = fulls + tmp;
-    }
-    partials + fulls
-}
 
 impl Display for AdmSubset{
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
@@ -483,8 +832,15 @@ impl <F: ComputationalField> VsparkMatrixGroup<F> {
     }
 
     pub fn i_poly(&self, h: usize, d: usize) -> Vec<usize> {
-        self.m.iter().map(|matrix| matrix.submatrices.iter()
-            .map(|subm| subm.id).pad(0, (1 << h))).flatten().pad(0, (1 << (h + d))).collect()
+        let ret: Vec<usize> = self.m.iter().map(|matrix| matrix.submatrices.iter()
+            .map(|subm| subm.id)
+            .pad(0, (1 << h))
+        )
+            .flatten()
+            .pad(0, (1 << (h + d)))
+            .collect();
+        assert_eq!(ret.len(), 1 << (h + d));
+        ret
     }
 
     pub fn x_poly(&self, h: usize, d: usize) -> Vec<usize> {
@@ -856,7 +1212,7 @@ mod tests {
             let decode = AdmSubset::decode(n, p, idx as usize);
             let mut res1 = F::zero();
             if let Some(s) = decode {
-                res1 = compute_tau(n, s, &r);
+                res1 = tau::no_decompositon::for_subset(n, s, &r);
             }
             let x = vec![
                 F::from((idx >> 0) & 1),
@@ -867,7 +1223,7 @@ mod tests {
                 F::from((idx >> 5) & 1),
                 F::from((idx >> 6) & 1),
             ];
-            let res2 = compute_tau_at_point(n, p, &x, &r);
+            let res2 = tau::no_decompositon::at_point(n, p, &x, &r);
             if res1 != res2 {
                 err.0.push(idx);
                 err.1.push((res1, res2));
@@ -881,11 +1237,11 @@ mod tests {
         assert_eq!(err.0, vec![]);
 
         let rng = &mut test_rng();
-        let tbl = compute_tau_table(n, p, &r);
+        let tbl = tau::no_decompositon::table(n, p, &r);
         let x = (0..7).map(|_| F::rand(rng)).collect_vec();
 
         let prover_evaluation = evaluate_multivar(&tbl, &x.clone().into_iter().collect_vec());
-        let verifier_evaluation = compute_tau_at_point(n, p, &x, &r);
+        let verifier_evaluation = tau::no_decompositon::at_point(n, p, &x, &r);
         assert_eq!(prover_evaluation, verifier_evaluation);
     }
 
@@ -972,8 +1328,8 @@ mod tests {
             let ry = (0..(ny + if py != 0 { 1 - py } else { 0 })).map(|_| F::rand(rng)).collect_vec();
 
             let test_epoly = grp.tests_to_e_poly(nx, px, &rx, ny, py, &ry, d);
-            let tau_table_x = compute_tau_table(nx, px, &rx);
-            let tau_table_y = compute_tau_table(ny, py, &ry);
+            let tau_table_x = tau::no_decompositon::table(nx, px, &rx);
+            let tau_table_y = tau::no_decompositon::table(ny, py, &ry);
             let rec_epoly = grp.e_poly(&tau_table_x, &tau_table_y, d);
 
             // let tau_all_possible_offsets = tau_table_x.iter().zip(tau_table_y).map(|(x, y)| *x * y).collect_vec();

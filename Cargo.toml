@@ -19,6 +19,9 @@ merlin = {version = "3.0.0"}
 num-traits = {version = "0.2.19"}
 zeroize = "1.8.1"
 sha2 = "0.10.8"
+tracing = "0.1.41"
+tracing-subscriber = { version = "0.3.19", features = ["env-filter"] }
+tracing-span-tree = "0.1.1"
 
 [profile.rel-with-debinfo]
 inherits = "release"

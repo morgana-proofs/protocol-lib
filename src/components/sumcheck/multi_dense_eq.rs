@@ -2,6 +2,7 @@ use std::iter::once;
 use std::marker::PhantomData;
 use std::ops::Index;
 use itertools::{assert_equal, Itertools};
+use tracing::instrument;
 use crate::common::algfn::AlgFnSO;
 use crate::common::claims::{EvalClaim, SinglePointClaims, SumClaim};
 use crate::common::math::{eq_poly, evaluate_multivar};
@@ -124,7 +125,6 @@ impl <F: TFelt, Transcript: TArithmeticTranscript<F>> TProtocol<Transcript> for 
 
         let poly_evs = (0..f.n_ins() - evals.len()).map(|_| ctx.read()).collect_vec();
 
-        println!("{:?}", poly_evs);
 
         let mut i = 0;
         (
@@ -154,6 +154,7 @@ impl<F: ComputationalField, Transcript: TArithmeticTranscript<F>> TProverImpl<Tr
     type ProverInput = Vec<Vec<F>>;
     type ProverOutput = ();
 
+    #[instrument(name="MultiDenseEqSumcheck::prove", level="info", skip_all)]
     fn _prove(protocol: &Self::Verifier, ctx: &mut Transcript, claims: <Self as TProtocol<Transcript>>::ClaimsBefore, advice: Self::ProverInput) -> (<Self as TProtocol<Transcript>>::ClaimsAfter, Self::ProverOutput) {
         let MultiPointEvalClaim { points, evals } = claims;
         points.iter().enumerate().for_each(|(idx, point)| {assert_eq!(point.len(), protocol.num_vars, "Wrong point len idx {}", idx)});
@@ -164,7 +165,6 @@ impl<F: ComputationalField, Transcript: TArithmeticTranscript<F>> TProverImpl<Tr
             .map(|(key, evs)| {
                 let (claims, polys): (Vec<(usize, MultiPointEvalClaimPart<F>)>, Vec<Vec<F>>) = evs.map(|(idx, claim)| {
                     let data = advice[claim.poly_id].clone();
-                    println!("{:?}", claim);
                     assert_eq!(claim.ev, evaluate_multivar(&data, &points[claim.point_id]), "Wrong input claim for poly {} point {} at index {}", claim.poly_id, claim.point_id, idx);
                     ((idx, claim), data)
                 }).unzip();
