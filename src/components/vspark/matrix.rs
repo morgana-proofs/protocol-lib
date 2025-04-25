@@ -245,7 +245,7 @@ pub mod tau {
 
 
         mod at_point_parts {
-            use crate::common::wrapper::TFelt;
+            use crate::common::wrapper::{ComputationalField, TFelt};
             use crate::components::sumcheck::dense_eq::eq_eval;
             use crate::components::vspark::matrix::{extend_r, hybrid_eq_eval};
 
@@ -268,7 +268,7 @@ pub mod tau {
                         border_sum += term;
                     }
                     tmp *= border_sum;
-                    fulls = fulls + tmp;
+                    fulls += tmp;
                 }
                 fulls
             }
@@ -313,7 +313,7 @@ pub mod tau {
                 let mut fulls = F::zero();
 
                 for k in mid..(n + 1 - p) {
-                    let mut tmp = delta(&x[0..k]);
+                    let mut tmp = delta(&x[mid..k]);
                     tmp = tmp * x[k];
                     tmp *= delta(&x[k + 1..k + p + 1]);
                     let mut border_sum = F::zero();
@@ -397,31 +397,35 @@ pub mod tau {
 
 
                 mod full {
+                    use crate::components::vspark::matrix::AdmSubset;
+                    use crate::components::vspark::matrix::tau::sqrt_decomposition;
                     use super::*;
                     #[test]
                     fn test_full_leq() {
                         let rng = &mut test_rng();
                         let n = 6;
                         let p = 0;
-                        let m = 6;
-                        for _ in 0..100 {
-                            let x = vec![
-                                F::rand(rng),
-                                F::rand(rng),
-                                F::rand(rng),
-                                F::rand(rng),
-                                F::rand(rng),
-                                F::rand(rng),
-                                F::zero(),
-                                F::zero(),
-                            ];
-                            let r = (0..r_size(n, p)).map(|_| F::rand(rng)).collect_vec();
-                            let expected = no_decompositon::at_point(n, p, &x, &r);
-                            let l = full_leq_l(n, p, m, &x, &r);
-                            let r = full_leq_r(n, p, m, &x, &r);
-                            println!("{} {}, {}", l, r, expected);
-                            let result = l * r;
-                            assert_eq!(result, expected);
+                        for mid in 1..n + 2 {
+                            for _x in 1usize..(1 << (n + 2)) {
+                                let k = _x.trailing_zeros() as usize;
+                                let m = (usize::BITS - _x.leading_zeros() - 1) as usize;
+
+                                let x = (0..n + 2).map(|i| {
+                                    F::from(((_x >> i) & 1) as u64)
+                                }).collect_vec();
+                                let r = (0..r_size(n, p)).map(|_| F::rand(rng)).collect_vec();
+
+                                let expected = if k < m && m < mid {
+                                    no_decompositon::at_point(n, p, &x, &r)
+                                } else {
+                                    F::zero()
+                                };
+
+                                let left = full_leq_l(n, p, mid, &x, &r);
+                                let right = full_leq_r(n, p, mid, &x, &r);
+                                let result = left * right;
+                                assert_eq!(result, expected, "x: {:#018b} mid: {}, {}, {}", _x, mid, left, right);
+                            }
                         }
                     }
 
@@ -430,25 +434,26 @@ pub mod tau {
                         let rng = &mut test_rng();
                         let n = 6;
                         let p = 0;
-                        let m = 4;
-                        for _ in 0..100 {
-                            let x = vec![
-                                F::one(),
-                                F::rand(rng),
-                                F::rand(rng),
-                                F::rand(rng),
-                                F::rand(rng),
-                                F::rand(rng),
-                                F::rand(rng),
-                                F::one(),
-                            ];
-                            let r = (0..r_size(n, p)).map(|_| F::rand(rng)).collect_vec();
-                            let expected = no_decompositon::at_point(n, p, &x, &r);
-                            let l = full_mid_l(n, p, m, &x, &r);
-                            let r = full_mid_r(n, p, m, &x, &r);
-                            println!("{} {}, {}", l, r, expected);
-                            let result = l * r;
-                            assert_eq!(result, expected);
+                        for mid in 1..n + 2 {
+                            for _x in 1usize..(1 << (n + 2)) {
+                                let k = _x.trailing_zeros() as usize;
+                                let m = (usize::BITS - _x.leading_zeros() - 1) as usize;
+
+
+                                let x = (0..n + 2).map(|i| {
+                                    F::from(((_x >> i) & 1) as u64)
+                                }).collect_vec();
+                                let r = (0..r_size(n, p)).map(|_| F::rand(rng)).collect_vec();
+
+                                let expected = if k < mid && mid <= m {
+                                    no_decompositon::at_point(n, p, &x, &r)
+                                } else {
+                                    F::zero()
+                                };
+
+                                let result = full_mid_l(n, p, mid, &x, &r) * full_mid_r(n, p, mid, &x, &r);
+                                assert_eq!(result, expected, "x: {:#018b} mid: {}", _x, mid);
+                            }
                         }
                     }
                     #[test]
@@ -456,25 +461,26 @@ pub mod tau {
                         let rng = &mut test_rng();
                         let n = 6;
                         let p = 0;
-                        let m = 2;
-                        for _ in 0..100 {
-                            let x = vec![
-                                F::zero(),
-                                F::zero(),
-                                F::rand(rng),
-                                F::rand(rng),
-                                F::rand(rng),
-                                F::rand(rng),
-                                F::rand(rng),
-                                F::rand(rng),
-                            ];
-                            let r = (0..r_size(n, p)).map(|_| F::rand(rng)).collect_vec();
-                            let expected = no_decompositon::at_point(n, p, &x, &r);
-                            let l = full_geq_l(n, p, m, &x, &r);
-                            let r = full_geq_r(n, p, m, &x, &r);
-                            println!("{} {}, {}", l, r, expected);
-                            let result = l * r;
-                            assert_eq!(result, expected);
+                        for mid in 1..n + 2 {
+                            for _x in 1usize..(1 << (n + 2)) {
+                                let k = _x.trailing_zeros() as usize;
+                                let m = (usize::BITS - _x.leading_zeros() - 1) as usize;
+
+
+                                let x = (0..n + 2).map(|i| {
+                                    F::from(((_x >> i) & 1) as u64)
+                                }).collect_vec();
+                                let r = (0..r_size(n, p)).map(|_| F::rand(rng)).collect_vec();
+
+                                let expected = if k < m && mid <= k {
+                                    no_decompositon::at_point(n, p, &x, &r)
+                                } else {
+                                    F::zero()
+                                };
+
+                                let result = full_geq_l(n, p, mid, &x, &r) * full_geq_r(n, p, mid, &x, &r);
+                                assert_eq!(result, expected, "x: {:#018b} mid: {}", _x, mid);
+                            }
                         }
                     }
                 }
@@ -548,27 +554,92 @@ pub mod tau {
             use ark_bn254::Fq as F;
             use ark_std::{test_rng, UniformRand};
             use itertools::Itertools;
+            use crate::common::math::evaluate_multivar;
             use crate::common::wrapper::TFeltUtil;
-            use crate::components::vspark::matrix::r_size;
+            use crate::components::vspark::matrix::{r_size, AdmSubset};
             use crate::components::vspark::matrix::tau::no_decompositon;
             use crate::components::vspark::matrix::tau::sqrt_decomposition;
+            use crate::components::vspark::matrix::tau::sqrt_decomposition::at_point_parts::{full_geq_l, full_geq_r, full_leq_l, full_leq_r, full_mid_l, full_mid_r};
+
+            #[test]
+            fn test_at_encoding_point() {
+                let rng = &mut test_rng();
+                let n = 6;
+                let p = 0;
+                for mid in 1..n + 2 {
+                    for k in 0..n + 2 {
+                        for m in 0..n + 2 {
+                            if k < m {
+                                let x = (0..n + 2).map(|i| {
+                                    if i < k || i > m {
+                                        F::zero()
+                                    } else if i == k || i == m {
+                                        F::one()
+                                    } else {
+                                        F::rand(rng)
+                                    }
+                                }).collect_vec();
+                                let r = (0..r_size(n, p)).map(|_| F::rand(rng)).collect_vec();
+                                let expected = no_decompositon::at_point(n, p, &x, &r);
+                                let result = sqrt_decomposition::at_point(n, p, mid, &x, &r);
+                                assert_eq!(result, expected);
+                            }
+                        }
+                    }
+                }
+            }
+
+            #[test]
+            fn test_at_01point() {
+                let rng = &mut test_rng();
+                let n = 6;
+                let p = 0;
+                for mid in 1..n + 2 {
+                    for _x in 0..(1 << (n + 2)) {
+                        let x = (0..n + 2).map(|i| {
+                            F::from(((_x >> i) & 1) as u64)
+                        }).collect_vec();
+                        let r = (0..r_size(n, p)).map(|_| F::rand(rng)).collect_vec();
+                        let expected = no_decompositon::at_point(n, p, &x, &r);
+                        let result = sqrt_decomposition::at_point(n, p, mid, &x, &r);
+                        assert_eq!(result, expected, "x: {:#018b} mid: {}", _x, mid);
+                    }
+                }
+            }
 
             #[test]
             fn test_at_point() {
                 let rng = &mut test_rng();
                 let n = 6;
                 let p = 0;
-                let m = 3;
-                for _ in 0..100 {
-                    let mut x = (0..n + 2).map(|_| F::rand(rng)).collect_vec();
-                    x[0] = F::zero();
-                    x[1] = F::zero();
-                    // x[2] = F::zero();
-                    x[n + 1] = F::zero();
+                for mid in 1..n + 2 {
+                    let x = (0..n + 2).map(|i| {
+                        F::rand(rng)
+                    }).collect_vec();
+
                     let r = (0..r_size(n, p)).map(|_| F::rand(rng)).collect_vec();
+
+                    let mut leq = vec![];
+                    let mut md = vec![];
+                    let mut geq = vec![];
+                    for _x in 0..(1 << (n + 2)) {
+                        let x = (0..n + 2).map(|i| {
+                            F::from(((_x >> i) & 1) as u64)
+                        }).collect_vec();
+                        leq.push(full_leq_l(n, p, mid, &x, &r) * full_leq_r(n, p, mid, &x, &r));
+                        md.push(full_mid_l(n, p, mid, &x, &r) * full_mid_r(n, p, mid, &x, &r));
+                        geq.push(full_geq_l(n, p, mid, &x, &r) * full_geq_r(n, p, mid, &x, &r));
+                    }
+
+                    assert_eq!(evaluate_multivar(&leq, &x), full_leq_l(n, p, mid, &x, &r) * full_leq_r(n, p, mid, &x, &r));
+                    assert_eq!(evaluate_multivar(&md, &x), full_mid_l(n, p, mid, &x, &r) * full_mid_r(n, p, mid, &x, &r));
+                    assert_eq!(evaluate_multivar(&geq, &x), full_geq_l(n, p, mid, &x, &r) * full_geq_r(n, p, mid, &x, &r));
+
+
+
                     let expected = no_decompositon::at_point(n, p, &x, &r);
-                    let result = sqrt_decomposition::at_point(n, p, m, &x, &r);
-                    assert_eq!(result, expected);
+                    let result = sqrt_decomposition::at_point(n, p, mid, &x, &r);
+                    assert_eq!(result, expected, "mid: {}", mid);
                 }
             }
         }
