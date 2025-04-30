@@ -16,7 +16,7 @@ use crate::components::sumcheck::dense_eq::eq_eval;
 use crate::components::sumcheck::generic::SumcheckProtocol;
 use crate::components::sumcheck::multi_dense_eq::{MultiDenseEqSumcheck, MultiPointEvalClaim, MultiPointEvalClaimPart};
 use crate::components::sumcheck::sumcheckable::Sumcheckable;
-use crate::components::vspark::matrix::{tau::no_decompositon::at_point, tau::no_decompositon::table, r_size, tau};
+use crate::components::vspark::matrix::{tau::no_decomposition::at_point, tau::no_decomposition::table, r_size, tau};
 use crate::transcript::transcript::{TArithmeticTranscript, TTranscriptInterface};
 use crate::protocol::component::{TProtocol, TProverImpl};
 use tracing::{info_span, instrument};
@@ -46,7 +46,7 @@ impl<F: TFelt> Vspark<F> {
     }
 
     fn compute_tau(n: usize, p: usize, x: &[F], r: &[F]) -> F {
-        tau::no_decompositon::at_point(n, p, x, r)
+        tau::no_decomposition::at_point(n, p, x, r)
     }
 }
 
@@ -219,7 +219,7 @@ impl<F: ComputationalField, Transcript: TArithmeticTranscript<F>> TProverImpl<Tr
             LookupType::Indexed(protocol.d, protocol.h + protocol.d),
         ]);
 
-        let tau_table_x = tau::no_decompositon::table(protocol.nx, protocol.px, r_x);
+        let tau_table_x = tau::no_decomposition::table(protocol.nx, protocol.px, r_x);
         assert_eq!(tau_table_x.len(), 1 << protocol.nx + 2);
         let mut tau_accesses_x = tau_table_x.iter().map(|_| F::zero()).collect::<Vec<_>>();
         let tau_values_x = x_poly.iter().map(|idx| {
@@ -227,7 +227,7 @@ impl<F: ComputationalField, Transcript: TArithmeticTranscript<F>> TProverImpl<Tr
             tau_table_x[*idx]
         }).collect::<Vec<_>>();
 
-        let tau_table_y = tau::no_decompositon::table(protocol.ny, protocol.py, r_y);
+        let tau_table_y = tau::no_decomposition::table(protocol.ny, protocol.py, r_y);
         assert_eq!(tau_table_y.len(), 1 << protocol.ny + 2);
         let mut tau_accesses_y = tau_table_y.iter().map(|_| F::zero()).collect::<Vec<_>>();
         let tau_values_y = y_poly.iter().map(|idx| {
@@ -404,7 +404,7 @@ mod tests {
     use tracing::info_span;
     use crate::common::claims::EvalClaim;
     use crate::common::math::evaluate_multivar;
-    use crate::components::vspark::matrix::{tau::no_decompositon::table, r_size, VsparkMatrixGroup};
+    use crate::components::vspark::matrix::{tau::no_decomposition::table, r_size, VsparkMatrixGroup};
     use crate::protocol::component::TProtocol;
     use crate::transcript::transcript::tests::ManualTestTranscript;
 

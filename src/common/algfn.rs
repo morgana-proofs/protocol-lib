@@ -47,7 +47,7 @@ impl<F: TFelt, Fun: AlgFnSO<F>> AlgFnSoUtils<F> for Fun {
         assert!(args.len() == n_ins);
         let l = args[0].len();
         for i in 1..n_ins {
-            assert!(args[i].len() == l)
+            assert_eq!(args[i].len(), l, "args[i].len() == l")
         }
 
         let output = (0..l).map(|place|

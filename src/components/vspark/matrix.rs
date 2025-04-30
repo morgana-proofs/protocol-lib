@@ -176,7 +176,7 @@ impl AdmSubset {
 }
 
 pub mod tau {
-    pub mod no_decompositon {
+    pub mod no_decomposition {
         use itertools::Itertools;
         use tracing::instrument;
         use crate::common::wrapper::{ComputationalField, TFelt, TFeltUtil};
@@ -241,13 +241,14 @@ pub mod tau {
         }
     }
     pub mod sqrt_decomposition {
-        use crate::common::wrapper::TFelt;
+        use tracing::instrument;
+        use crate::common::wrapper::{ComputationalField, TFelt};
 
-
-        mod at_point_parts {
+        pub(crate) mod parts {
+            use itertools::Itertools;
             use crate::common::wrapper::{ComputationalField, TFelt};
             use crate::components::sumcheck::dense_eq::{eq_eval, eq_eval_single};
-            use crate::components::vspark::matrix::{extend_r, hybrid_eq_eval};
+            use crate::components::vspark::matrix::{extend_r, hybrid_eq_eval, point_from_usize};
 
             fn delta<F: TFelt>(x: &[F]) -> F {
                 eq_eval(&vec![F::zero(); x.len()], &x)
@@ -293,22 +294,64 @@ pub mod tau {
                 total
             }
 
-            pub(crate) fn leq_l<F: TFelt>(n: usize, p: usize, mid: usize, x: &[F], r: &[F]) -> F {
-                delta(&x[0..mid])
+            pub fn left_table<F: ComputationalField>(n: usize, p: usize, mid: usize, r: &[F], f: impl Fn(usize, usize, usize, &[F], &[F]) -> F) -> Vec<F> {
+                (0..(1 << mid)).map(|i| {
+                    f(n, p, mid, &point_from_usize(n, i)[..mid], &r)
+                }).collect_vec()
             }
 
-            pub(crate) fn leq_r<F: TFelt>(n: usize, p: usize, mid: usize, x: &[F], r: &[F]) -> F {
-                by_selector(
-                    n, p, x, r,
-                    |k, m, mid| mid <= k && k < m,
-                    mid,
-                    |i, mid| mid <= i,
-                )
+            pub fn right_table<F: ComputationalField>(n: usize, p: usize, mid: usize, r: &[F], f: impl Fn(usize, usize, usize, &[F], &[F]) -> F) -> Vec<F> {
+                (0..(1 << (n + 2 - mid))).map(|i| {
+                    f(n, p, mid, &point_from_usize(n, i << mid)[mid..], &r)
+                }).collect_vec()
             }
-            pub(crate) fn mid_l<F: TFelt>(n: usize, p: usize, mid: usize, x: &[F], r: &[F]) -> F {
-                assert!(x.len() == n + 2);
+
+            pub fn leq_l<F: TFelt>(n: usize, p: usize, mid: usize, x: &[F], r: &[F]) -> F {
+                delta(&x)
+            }
+            pub fn leq_r<F: TFelt>(n: usize, p: usize, mid: usize, x: &[F], r: &[F]) -> F {
+                assert_eq!(x.len(), n + 2 - mid, "x.len() == n + 2 - mid");
                 let r = extend_r(n, p, r);
                 assert_eq!(r.len(), n);
+
+                let mut total = F::zero();
+                for k in 0..n + 1 {
+                    for m in k + 1..n + 2 {
+                        if !(|k, m, mid| mid <= k && k < m)(k, m, mid) {
+                            continue;
+                        }
+                        let mut term = F::one();
+                        for i in 0..n + 2 {
+                            if !(|i, mid| mid <= i)(i, mid) {
+                                continue;
+                            }
+                            if 0 <= i && i < k {
+                                term *= F::one() - x[i - mid];
+                            } else if i == k {
+                                term *= x[k - mid];
+                            } else if k < i && i < m {
+                                term *= if i < p + 1 {
+                                    r[i - 1] * x[i - mid] + F::one() - x[i - mid]
+                                } else {
+                                    eq_eval_single(&x[i - mid], &r[i - 1])
+                                };
+                            } else if i == m {
+                                term *= x[m - mid];
+                            } else if m < i && i < n + 2 {
+                                term *= F::one() - x[i - mid];
+                            } else {
+                                unreachable!();
+                            }
+                        }
+                        total += term;
+                    }
+                }
+                total
+            }
+            pub fn mid_l<F: TFelt>(n: usize, p: usize, mid: usize, x: &[F], r: &[F]) -> F {
+                assert_eq!(x.len(), mid, "x.len() == mid");
+                let r = extend_r(n, p, r);
+                assert_eq!(r.len(), n, "r.len() == n");
 
                 let mut total = F::zero();
                 for k in 0..mid {
@@ -332,8 +375,8 @@ pub mod tau {
                 }
                 total
             }
-            pub(crate) fn mid_r<F: TFelt>(n: usize, p: usize, mid: usize, x: &[F], r: &[F]) -> F {
-                assert!(x.len() == n + 2);
+            pub fn mid_r<F: TFelt>(n: usize, p: usize, mid: usize, x: &[F], r: &[F]) -> F {
+                assert!(x.len() == n + 2 - mid);
                 let r = extend_r(n, p, r);
                 assert_eq!(r.len(), n);
 
@@ -343,14 +386,14 @@ pub mod tau {
                     for i in mid..n + 2 {
                         if mid <= i && i < m {
                             term *= if i < p + 1 {
-                                r[i - 1] * x[i] + F::one() - x[i]
+                                r[i - 1] * x[i - mid] + F::one() - x[i - mid]
                             } else {
-                                eq_eval_single(&x[i], &r[i - 1])
+                                eq_eval_single(&x[i - mid], &r[i - 1])
                             };
                         } else if i == m {
-                            term *= x[m];
+                            term *= x[m - mid];
                         } else if m < i && i < n + 2 {
-                            term *= F::one() - x[i];
+                            term *= F::one() - x[i - mid];
                         } else {
                             unreachable!();
                         }
@@ -359,29 +402,60 @@ pub mod tau {
                 }
                 total
             }
-            pub(crate) fn ge_l<F: TFelt>(n: usize, p: usize, mid: usize, x: &[F], r: &[F]) -> F {
-                by_selector(
-                    n, p, x, r,
-                    |k, m, mid| k < m && m < mid,
-                    mid,
-                    |i, mid| i < mid,
-                )
+            pub fn ge_l<F: TFelt>(n: usize, p: usize, mid: usize, x: &[F], r: &[F]) -> F {
+                assert!(x.len() == mid);
+                let r = extend_r(n, p, r);
+                assert_eq!(r.len(), n);
+
+                let mut total = F::zero();
+                for k in 0..n + 1 {
+                    for m in k + 1..n + 2 {
+                        if !(|k, m, mid| k < m && m < mid)(k, m, mid) {
+                            continue;
+                        }
+                        let mut term = F::one();
+                        for i in 0..n + 2 {
+                            if !(|i, mid| i < mid)(i, mid) {
+                                continue;
+                            }
+                            if 0 <= i && i < k {
+                                term *= F::one() - x[i];
+                            } else if i == k {
+                                term *= x[k];
+                            } else if k < i && i < m {
+                                term *= if i < p + 1 {
+                                    r[i - 1] * x[i] + F::one() - x[i]
+                                } else {
+                                    eq_eval_single(&x[i], &r[i - 1])
+                                };
+                            } else if i == m {
+                                term *= x[m];
+                            } else if m < i && i < n + 2 {
+                                term *= F::one() - x[i];
+                            } else {
+                                unreachable!();
+                            }
+                        }
+                        total += term;
+                    }
+                }
+                total
             }
-            pub(crate) fn ge_r<F: TFelt>(n: usize, p: usize, mid: usize, x: &[F], r: &[F]) -> F {
-                delta(&x[mid..])
+            pub fn ge_r<F: TFelt>(n: usize, p: usize, mid: usize, x: &[F], r: &[F]) -> F {
+                delta(&x)
             }
 
 
             #[cfg(test)]
             mod tests {
-                use crate::components::vspark::matrix::tau::{no_decompositon, sqrt_decomposition};
-                use super::*;
+                use crate::components::vspark::matrix::tau::{no_decomposition, sqrt_decomposition};
                 use ark_bn254::Fq as F;
                 use ark_std::{test_rng, UniformRand};
                 use itertools::Itertools;
                 use crate::common::math::evaluate_multivar;
                 use crate::common::wrapper::TFeltUtil;
                 use crate::components::vspark::matrix::r_size;
+                use crate::components::vspark::matrix::tau::sqrt_decomposition::parts;
 
                 #[test]
                 fn test_by_selector() {
@@ -401,8 +475,8 @@ pub mod tau {
                             }).collect_vec();
                         }
 
-                        let expected = no_decompositon::at_point(n, p, &x, &r);
-                        let result = by_selector(n, p, &x, &r, |k, m, mid| true, mid, |i, mid| true);
+                        let expected = no_decomposition::at_point(n, p, &x, &r);
+                        let result = parts::by_selector(n, p, &x, &r, |k, m, mid| true, mid, |i, mid| true);
                         assert_eq!(result, expected, "mid: {}", mid);
                     }
                 }
@@ -425,9 +499,9 @@ pub mod tau {
                                         }
                                     }).collect_vec();
                                     let r = (0..r_size(n, p)).map(|_| F::rand(rng)).collect_vec();
-                                    let expected = no_decompositon::at_point(n, p, &x, &r);
-                                    let left = leq_l(n, p, mid, &x, &r);
-                                    let right = leq_r(n, p, mid, &x, &r);
+                                    let expected = no_decomposition::at_point(n, p, &x, &r);
+                                    let left = parts::leq_l(n, p, mid, &x[..mid], &r);
+                                    let right = parts::leq_r(n, p, mid, &x[mid..], &r);
                                     let result = left * right;
                                     assert_eq!(result, expected, "k: {}, m: {}, mid: {}, x: {:?}, left: {}, right: {}", k, m, mid, x, left, right);
                                 }
@@ -455,9 +529,9 @@ pub mod tau {
                                         }
                                     }).collect_vec();
                                     let r = (0..r_size(n, p)).map(|_| F::rand(rng)).collect_vec();
-                                    let expected = no_decompositon::at_point(n, p, &x, &r);
-                                    let left = ge_l(n, p, mid, &x, &r);
-                                    let right = ge_r(n, p, mid, &x, &r);
+                                    let expected = no_decomposition::at_point(n, p, &x, &r);
+                                    let left = parts::ge_l(n, p, mid, &x[..mid], &r);
+                                    let right = parts::ge_r(n, p, mid, &x[mid..], &r);
                                     let result = left * right;
                                     assert_eq!(result, expected, "k: {}, m: {}, mid: {}, x: {:?}, left: {}, right: {}", k, m, mid, x, left, right);
                                 }
@@ -486,15 +560,15 @@ pub mod tau {
                                     }).collect_vec();
                                     let r = (0..r_size(n, p)).map(|_| F::rand(rng)).collect_vec();
                                     if k < mid && mid <= m {
-                                        let expected = no_decompositon::at_point(n, p, &x, &r);
-                                        let left = mid_l(n, p, mid, &x, &r);
-                                        let right = mid_r(n, p, mid, &x, &r);
+                                        let expected = no_decomposition::at_point(n, p, &x, &r);
+                                        let left = parts::mid_l(n, p, mid, &x[..mid], &r);
+                                        let right = parts::mid_r(n, p, mid, &x[mid..], &r);
                                         let result = left * right;
                                         assert_eq!(result, expected, "k: {}, m: {}, mid: {}, x: {:?}, left: {}, right: {}", k, m, mid, x, left, right);
                                     } else {
                                         let expected = F::zero();
-                                        let left = mid_l(n, p, mid, &x, &r);
-                                        let right = mid_r(n, p, mid, &x, &r);
+                                        let left = parts::mid_l(n, p, mid, &x[..mid], &r);
+                                        let right = parts::mid_r(n, p, mid, &x[mid..], &r);
                                         let result = left * right;
                                         assert_eq!(result, expected, "k: {}, m: {}, mid: {}, x: {:?}, left: {}, right: {}", k, m, mid, x, left, right);
                                     }
@@ -507,14 +581,32 @@ pub mod tau {
         }
         pub fn at_point<F: TFelt>(n: usize, p: usize, mid: usize, x: &[F], r: &[F]) -> F {
 
-            let leq = at_point_parts::leq_l(n, p, mid, x, r) * at_point_parts::leq_r(n, p, mid, x, r);
-            let middle = at_point_parts::mid_l(n, p, mid, x, r) * at_point_parts::mid_r(n, p, mid, x, r);
-            let ge = at_point_parts::ge_l(n, p, mid, x, r) * at_point_parts::ge_r(n, p, mid, x, r);
+            let leq = parts::leq_l(n, p, mid, &x[..mid], r) * parts::leq_r(n, p, mid, &x[mid..], r);
+            let middle = parts::mid_l(n, p, mid, &x[..mid], r) * parts::mid_r(n, p, mid, &x[mid..], r);
+            let ge = parts::ge_l(n, p, mid, &x[..mid], r) * parts::ge_r(n, p, mid, &x[mid..], r);
             #[cfg(test)]
             {
                 println!("{:?} {:?} {:?}", leq, middle, ge);
             }
             leq + middle + ge
+        }
+
+        #[instrument(level = "debug", skip_all)]
+        pub fn tables<F: ComputationalField>(n: usize, p: usize, mid: usize, r: &[F]) -> [[Vec<F>; 2]; 3] {
+            [
+                [
+                    parts::left_table(n, p, mid, r, parts::leq_l),
+                    parts::right_table(n, p, mid, r, parts::leq_r),
+                ],
+                [
+                    parts::left_table(n, p, mid, r, parts::mid_l),
+                    parts::right_table(n, p, mid, r, parts::mid_r),
+                ],
+                [
+                    parts::left_table(n, p, mid, r, parts::ge_l),
+                    parts::right_table(n, p, mid, r, parts::ge_r),
+                ],
+            ]
         }
 
         #[cfg(test)]
@@ -524,7 +616,7 @@ pub mod tau {
             use itertools::Itertools;
             use crate::common::wrapper::TFeltUtil;
             use crate::components::vspark::matrix::{r_size, AdmSubset};
-            use crate::components::vspark::matrix::tau::no_decompositon;
+            use crate::components::vspark::matrix::tau::no_decomposition;
             use crate::components::vspark::matrix::tau::sqrt_decomposition;
 
             #[test]
@@ -546,7 +638,7 @@ pub mod tau {
                                     }
                                 }).collect_vec();
                                 let r = (0..r_size(n, p)).map(|_| F::rand(rng)).collect_vec();
-                                let expected = no_decompositon::at_point(n, p, &x, &r);
+                                let expected = no_decomposition::at_point(n, p, &x, &r);
                                 let result = sqrt_decomposition::at_point(n, p, mid, &x, &r);
                                 assert_eq!(result, expected, "k: {}, m: {}, mid: {}, x: {:?}", k, m, mid, x);
                             }
@@ -566,7 +658,7 @@ pub mod tau {
                             F::from(((_x >> i) & 1) as u64)
                         }).collect_vec();
                         let r = (0..r_size(n, p)).map(|_| F::rand(rng)).collect_vec();
-                        let expected = no_decompositon::at_point(n, p, &x, &r);
+                        let expected = no_decomposition::at_point(n, p, &x, &r);
                         let result = sqrt_decomposition::at_point(n, p, mid, &x, &r);
                         assert_eq!(result, expected, "x: {:#018b} mid: {}", _x, mid);
                     }
@@ -594,7 +686,7 @@ pub mod tau {
 
 
 
-                    let expected = no_decompositon::at_point(n, p, &x, &r);
+                    let expected = no_decomposition::at_point(n, p, &x, &r);
                     let result = sqrt_decomposition::at_point(n, p, mid, &x, &r);
                     assert_eq!(result, expected, "mid: {}", mid);
                 }
@@ -1245,10 +1337,10 @@ mod tests {
             let decode = AdmSubset::decode(n, p, idx as usize);
             let mut res1 = F::zero();
             if let Some(s) = decode {
-                res1 = tau::no_decompositon::for_subset(n, s, &r);
+                res1 = tau::no_decomposition::for_subset(n, s, &r);
 
                 let x = point_from_usize(n, idx);
-                let res2 = tau::no_decompositon::at_point(n, p, &x, &r);
+                let res2 = tau::no_decomposition::at_point(n, p, &x, &r);
                 if res1 != res2 {
                     if decode.is_some() {
                         err.2.push("adm")
@@ -1268,11 +1360,11 @@ mod tests {
         assert_eq!(err.0, vec![]);
 
         let rng = &mut test_rng();
-        let tbl = tau::no_decompositon::table(n, p, &r);
+        let tbl = tau::no_decomposition::table(n, p, &r);
         let x = (0..7).map(|_| F::rand(rng)).collect_vec();
 
         let prover_evaluation = evaluate_multivar(&tbl, &x.clone().into_iter().collect_vec());
-        let verifier_evaluation = tau::no_decompositon::at_point(n, p, &x, &r);
+        let verifier_evaluation = tau::no_decomposition::at_point(n, p, &x, &r);
         assert_eq!(prover_evaluation, verifier_evaluation);
     }
 
@@ -1359,8 +1451,8 @@ mod tests {
             let ry = (0..(ny + if py != 0 { 1 - py } else { 0 })).map(|_| F::rand(rng)).collect_vec();
 
             let test_epoly = grp.tests_to_e_poly(nx, px, &rx, ny, py, &ry, d);
-            let tau_table_x = tau::no_decompositon::table(nx, px, &rx);
-            let tau_table_y = tau::no_decompositon::table(ny, py, &ry);
+            let tau_table_x = tau::no_decomposition::table(nx, px, &rx);
+            let tau_table_y = tau::no_decomposition::table(ny, py, &ry);
             let rec_epoly = grp.e_poly(&tau_table_x, &tau_table_y, d);
 
             // let tau_all_possible_offsets = tau_table_x.iter().zip(tau_table_y).map(|(x, y)| *x * y).collect_vec();
