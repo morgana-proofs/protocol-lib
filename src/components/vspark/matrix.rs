@@ -1,6 +1,6 @@
 use std::fmt::{Display, Formatter};
 use std::iter::once;
-use std::ops::BitXor;
+use std::ops::{BitXor, Index};
 use ark_std::iterable::Iterable;
 use ark_std::{log2, UniformRand};
 use ark_std::rand::{Rng, RngCore};
@@ -241,57 +241,26 @@ pub mod tau {
         }
     }
     pub mod sqrt_decomposition {
+        use std::ops::Index;
+        use itertools::Itertools;
         use tracing::instrument;
         use crate::common::wrapper::{ComputationalField, TFelt};
+        use crate::components::vspark::matrix::IndexTable;
 
         pub(crate) mod parts {
             use itertools::Itertools;
             use crate::common::wrapper::{ComputationalField, TFelt};
             use crate::components::sumcheck::dense_eq::{eq_eval, eq_eval_single};
-            use crate::components::vspark::matrix::{extend_r, hybrid_eq_eval, point_from_usize};
+            use crate::components::vspark::matrix::{extend_r, hybrid_eq_eval, point_from_usize, IndexTable};
 
             fn delta<F: TFelt>(x: &[F]) -> F {
                 eq_eval(&vec![F::zero(); x.len()], &x)
             }
 
-            fn by_selector<F: TFelt>(n: usize, p: usize, x: &[F], r: &[F], case_selector: impl Fn(usize, usize, usize) -> bool, mid: usize, side_selector: impl Fn(usize, usize) -> bool) -> F {
-                assert!(x.len() == n + 2);
-                let r = extend_r(n, p, r);
-                assert_eq!(r.len(), n);
-
-                let mut total = F::zero();
-                for k in 0..n + 1 {
-                    for m in k + 1..n + 2 {
-                        if !case_selector(k, m, mid) {
-                            continue;
-                        }
-                        let mut term = F::one();
-                        for i in 0..n + 2 {
-                            if !side_selector(i, mid) {
-                                continue;
-                            }
-                            if 0 <= i && i < k {
-                                term *= F::one() - x[i];
-                            } else if i == k {
-                                term *= x[k];
-                            } else if k < i && i < m {
-                                term *= if i < p + 1 {
-                                    r[i - 1] * x[i] + F::one() - x[i]
-                                } else {
-                                    eq_eval_single(&x[i], &r[i - 1])
-                                };
-                            } else if i == m {
-                                term *= x[m];
-                            } else if m < i && i < n + 2 {
-                                term *= F::one() - x[i];
-                            } else {
-                                unreachable!();
-                            }
-                        }
-                        total += term;
-                    }
-                }
-                total
+            fn delta_table<F: TFelt>(logsize: usize) -> Vec<F> {
+                let mut ret = vec![F::zero(); 1 << logsize];
+                ret[0] = F::one();
+                ret
             }
 
             pub fn left_table<F: ComputationalField>(n: usize, p: usize, mid: usize, r: &[F], f: impl Fn(usize, usize, usize, &[F], &[F]) -> F) -> Vec<F> {
@@ -306,6 +275,30 @@ pub mod tau {
                 }).collect_vec()
             }
 
+            pub fn leq_l_table<F: ComputationalField>(n: usize, p: usize, mid: usize, r: &[F]) -> Vec<F> {
+                delta_table(mid)
+            }
+
+            pub fn leq_r_table<F: ComputationalField>(n: usize, p: usize, mid: usize, r: &[F]) -> Vec<F> {
+                right_table(n, p, mid, r, leq_r)
+            }
+
+            pub fn mid_l_table<F: ComputationalField>(n: usize, p: usize, mid: usize, r: &[F]) -> Vec<F> {
+                left_table(n, p, mid, r, mid_l)
+            }
+
+            pub fn mid_r_table<F: ComputationalField>(n: usize, p: usize, mid: usize, r: &[F]) -> Vec<F> {
+                right_table(n, p, mid, r, mid_r)
+            }
+
+            pub fn ge_l_table<F: ComputationalField>(n: usize, p: usize, mid: usize, r: &[F]) -> Vec<F> {
+                left_table(n, p, mid, r, ge_l)
+            }
+
+            pub fn ge_r_table<F: ComputationalField>(n: usize, p: usize, mid: usize, r: &[F]) -> Vec<F> {
+                delta_table(n + 2 - mid)
+            }
+
             pub fn leq_l<F: TFelt>(n: usize, p: usize, mid: usize, x: &[F], r: &[F]) -> F {
                 delta(&x)
             }
@@ -315,16 +308,10 @@ pub mod tau {
                 assert_eq!(r.len(), n);
 
                 let mut total = F::zero();
-                for k in 0..n + 1 {
+                for k in mid..n + 1 {
                     for m in k + 1..n + 2 {
-                        if !(|k, m, mid| mid <= k && k < m)(k, m, mid) {
-                            continue;
-                        }
                         let mut term = F::one();
-                        for i in 0..n + 2 {
-                            if !(|i, mid| mid <= i)(i, mid) {
-                                continue;
-                            }
+                        for i in mid..n + 2 {
                             if 0 <= i && i < k {
                                 term *= F::one() - x[i - mid];
                             } else if i == k {
@@ -409,15 +396,9 @@ pub mod tau {
 
                 let mut total = F::zero();
                 for k in 0..n + 1 {
-                    for m in k + 1..n + 2 {
-                        if !(|k, m, mid| k < m && m < mid)(k, m, mid) {
-                            continue;
-                        }
+                    for m in k + 1..mid {
                         let mut term = F::one();
-                        for i in 0..n + 2 {
-                            if !(|i, mid| i < mid)(i, mid) {
-                                continue;
-                            }
+                        for i in 0..mid {
                             if 0 <= i && i < k {
                                 term *= F::one() - x[i];
                             } else if i == k {
@@ -457,29 +438,6 @@ pub mod tau {
                 use crate::components::vspark::matrix::r_size;
                 use crate::components::vspark::matrix::tau::sqrt_decomposition::parts;
 
-                #[test]
-                fn test_by_selector() {
-                    let rng = &mut test_rng();
-                    let n = 6;
-                    let p = 0;
-                    for mid in 1..n + 2 {
-                        let x = (0..n + 2).map(|i| {
-                            F::rand(rng)
-                        }).collect_vec();
-
-                        let r = (0..r_size(n, p)).map(|_| F::rand(rng)).collect_vec();
-
-                        for _x in 0..(1 << (n + 2)) {
-                            let x = (0..n + 2).map(|i| {
-                                F::from(((_x >> i) & 1) as u64)
-                            }).collect_vec();
-                        }
-
-                        let expected = no_decomposition::at_point(n, p, &x, &r);
-                        let result = parts::by_selector(n, p, &x, &r, |k, m, mid| true, mid, |i, mid| true);
-                        assert_eq!(result, expected, "mid: {}", mid);
-                    }
-                }
                 #[test]
                 fn test_leq() {
                     let rng = &mut test_rng();
@@ -591,22 +549,42 @@ pub mod tau {
             leq + middle + ge
         }
 
+        pub struct SqrtSplitTauTable<F> {
+            mid: usize,
+            pub parts: [[Vec<F>; 2]; 3]
+        }
+
+        impl<F: ComputationalField> IndexTable for SqrtSplitTauTable<F> {
+            type Output = F;
+
+            fn at(&self, index: usize) -> Self::Output {
+                let l_idx = index % (1 << self.mid);
+                let r_idx = index >> self.mid;
+                self.parts.iter().map(|pair| {
+                    pair[0][l_idx] * pair[1][r_idx]
+                }).sum()
+            }
+        }
+
         #[instrument(level = "debug", skip_all)]
-        pub fn tables<F: ComputationalField>(n: usize, p: usize, mid: usize, r: &[F]) -> [[Vec<F>; 2]; 3] {
-            [
-                [
-                    parts::left_table(n, p, mid, r, parts::leq_l),
-                    parts::right_table(n, p, mid, r, parts::leq_r),
-                ],
-                [
-                    parts::left_table(n, p, mid, r, parts::mid_l),
-                    parts::right_table(n, p, mid, r, parts::mid_r),
-                ],
-                [
-                    parts::left_table(n, p, mid, r, parts::ge_l),
-                    parts::right_table(n, p, mid, r, parts::ge_r),
-                ],
-            ]
+        pub fn tables<F: ComputationalField>(n: usize, p: usize, mid: usize, r: &[F]) -> SqrtSplitTauTable<F> {
+            SqrtSplitTauTable {
+                mid,
+                parts: [
+                    [
+                        parts::leq_l_table(n, p, mid, r),
+                        parts::leq_r_table(n, p, mid, r),
+                    ],
+                    [
+                        parts::mid_l_table(n, p, mid, r),
+                        parts::mid_r_table(n, p, mid, r),
+                    ],
+                    [
+                        parts::ge_l_table(n, p, mid, r),
+                        parts::ge_r_table(n, p, mid, r),
+                    ],
+                ]
+            }
         }
 
         #[cfg(test)]
@@ -932,13 +910,25 @@ impl <F: TFelt> VsparkMatrixGroup<F> {
     }
 }
 
+pub trait IndexTable {
+    type Output;
+    fn at(&self, idx: usize) -> Self::Output;
+}
+
+impl<F: Clone> IndexTable for Vec<F> {
+    type Output = F;
+    fn at(&self, idx: usize) -> Self::Output {
+        self[idx].clone()
+    }
+}
+
 impl <F: ComputationalField> VsparkMatrixGroup<F> {
-    pub fn e_poly(&self, taus_x: &[F], taus_y: &[F], d: usize) -> Vec<F> {
+    pub fn e_poly(&self, taus_x: &impl IndexTable<Output=F>, taus_y: &impl IndexTable<Output=F>, d: usize) -> Vec<F> {
         let mut ret = vec![];
 
         for i in 0..self.m.len() {
             ret.push(self.m[i].submatrices.iter().map(|sm| {
-                taus_x[sm.x.encode()] * taus_y[sm.y.encode()] * sm.coeff * (
+                taus_x.at(sm.x.encode()) * taus_y.at(sm.y.encode()) * sm.coeff * (
                     ret[sm.id] + if sm.id == 0 {
                         F::one()
                     } else {
@@ -1454,6 +1444,9 @@ mod tests {
             let tau_table_x = tau::no_decomposition::table(nx, px, &rx);
             let tau_table_y = tau::no_decomposition::table(ny, py, &ry);
             let rec_epoly = grp.e_poly(&tau_table_x, &tau_table_y, d);
+            let sqrt_tau_table_x = tau::sqrt_decomposition::tables(nx, px, (nx + 2) / 2, &rx);
+            let sqrt_tau_table_y = tau::sqrt_decomposition::tables(ny, py, (ny + 2) / 2, &ry);
+            let sqrt_epoly = grp.e_poly(&sqrt_tau_table_x, &sqrt_tau_table_y, d);
 
             // let tau_all_possible_offsets = tau_table_x.iter().zip(tau_table_y).map(|(x, y)| *x * y).collect_vec();
             // println!("{:?}", tau_all_possible_offsets);
@@ -1462,6 +1455,7 @@ mod tests {
             // println!("{:?}", expected_answer);
 
             assert_eq!(test_epoly, rec_epoly);
+            assert_eq!(sqrt_epoly, rec_epoly);
 
             let mut adjusted_e_poly = test_epoly.clone();
             adjusted_e_poly[0] += F::one();

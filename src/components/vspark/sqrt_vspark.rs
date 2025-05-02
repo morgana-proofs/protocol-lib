@@ -26,7 +26,11 @@ use std::iter::once;
 use std::marker::PhantomData;
 use std::ops::Index;
 use tracing::{info_span, instrument};
+use crate::components::vspark::matrix::tau::sqrt_decomposition::SqrtSplitTauTable;
+use crate::components::vspark::vspark::VsparkProverInput;
 
+
+#[derive(Debug, Clone)]
 pub struct Vspark<F: TFelt> {
     d: usize,  // matrix number logsize
     h: usize,  // description logsize
@@ -40,7 +44,7 @@ pub struct Vspark<F: TFelt> {
 }
 
 impl<F: TFelt> Vspark<F> {
-    fn new(
+    pub fn new(
         nx: usize,
         midx: usize,
         px: usize,
@@ -66,19 +70,6 @@ impl<F: TFelt> Vspark<F> {
     fn compute_tau(n: usize, p: usize, mid: usize, x: &[F], r: &[F]) -> F {
         tau::sqrt_decomposition::at_point(n, p, mid, x, r)
     }
-}
-
-pub struct VsparkProverInput<F: TFelt> {
-    e_poly: Vec<F>,
-    c_poly: Vec<F>,
-    i_poly: Vec<usize>,
-    x_poly: Vec<usize>,
-    y_poly: Vec<usize>,
-    _pd: PhantomData<F>,
-}
-
-pub struct VsparkProverOutput<F: TFelt> {
-    _pd: PhantomData<F>,
 }
 
 #[derive(Clone)]
@@ -540,7 +531,10 @@ impl<F: ComputationalField, Transcript: TArithmeticTranscript<F>> TProverImpl<Tr
             LookupType::Indexed(protocol.d, protocol.h + protocol.d),
         ]);
 
-        let [[x_tau_table_leq_l, x_tau_table_leq_r], [x_tau_table_mid_l, x_tau_table_mid_r], [x_tau_table_ge_l, x_tau_table_ge_r]] =
+        let SqrtSplitTauTable {
+            parts: [[x_tau_table_leq_l, x_tau_table_leq_r], [x_tau_table_mid_l, x_tau_table_mid_r], [x_tau_table_ge_l, x_tau_table_ge_r]],
+            ..
+        } =
             tau::sqrt_decomposition::tables(protocol.nx, protocol.px, protocol.midx, r_x);
         let mut x_tau_accesses_l = x_tau_table_leq_l
             .iter()
@@ -548,9 +542,6 @@ impl<F: ComputationalField, Transcript: TArithmeticTranscript<F>> TProverImpl<Tr
             .collect::<Vec<_>>();
         let mut x_tau_accesses_r = x_tau_table_leq_r
             .iter()
-            .map(|_| F::zero())
-            .collect::<Vec<_>>();
-        let mut x_tau_accesses_TEST = (0..(x_tau_table_leq_l.len() * x_tau_table_leq_r.len()))
             .map(|_| F::zero())
             .collect::<Vec<_>>();
         let mut x_tau_indexes_l = vec![];
@@ -570,7 +561,6 @@ impl<F: ComputationalField, Transcript: TArithmeticTranscript<F>> TProverImpl<Tr
                 x_tau_indexes_r.push(F::from(r_idx as u64));
                 x_tau_accesses_l[l_idx] += F::one();
                 x_tau_accesses_r[r_idx] += F::one();
-                x_tau_accesses_TEST[idx] += F::one();
                 x_tau_values_leq_l.push(x_tau_table_leq_l[l_idx]);
                 x_tau_values_leq_r.push(x_tau_table_leq_r[r_idx]);
                 x_tau_values_mid_l.push(x_tau_table_mid_l[l_idx]);
@@ -579,7 +569,10 @@ impl<F: ComputationalField, Transcript: TArithmeticTranscript<F>> TProverImpl<Tr
                 x_tau_values_ge_r.push(x_tau_table_ge_r[r_idx]);
             });
 
-        let [[y_tau_table_leq_l, y_tau_table_leq_r], [y_tau_table_mid_l, y_tau_table_mid_r], [y_tau_table_ge_l, y_tau_table_ge_r]] =
+        let SqrtSplitTauTable {
+            parts: [[y_tau_table_leq_l, y_tau_table_leq_r], [y_tau_table_mid_l, y_tau_table_mid_r], [y_tau_table_ge_l, y_tau_table_ge_r]],
+            ..
+        } =
             tau::sqrt_decomposition::tables(protocol.ny, protocol.py, protocol.midy, r_y);
         let mut y_tau_accesses_l = y_tau_table_leq_l
             .iter()
@@ -1109,6 +1102,73 @@ impl<F: ComputationalField, Transcript: TArithmeticTranscript<F>> TProverImpl<Tr
     }
 }
 
+pub mod bench_parts {
+    use ark_serialize::{CanonicalDeserialize, CanonicalSerialize};
+    use ark_std::rand::RngCore;
+    use ark_std::UniformRand;
+    use itertools::Itertools;
+    use serde::{Deserialize, Serialize};
+    use tracing::info_span;
+    use crate::common::claims::EvalClaim;
+    use crate::common::math::evaluate_multivar;
+    use crate::common::wrapper::{ComputationalField, TFelt};
+    use crate::components::vspark::matrix::{r_size, tau, VsparkMatrixGroup};
+    use crate::components::vspark::sqrt_vspark::Vspark;
+    use crate::components::vspark::vspark::VsparkProverInput;
+    use crate::protocol::component::TProtocol;
+    use crate::transcript::transcript::ProofTranscript;
+
+    #[derive(Clone, CanonicalSerialize, CanonicalDeserialize)]
+    pub struct VsparkTestcaseData<F: ComputationalField + Sync + Send> {
+        pub prover_input: VsparkProverInput<F>,
+        pub eval_claim: EvalClaim<F>,
+    }
+
+    pub fn build_sqrt_vspark_data<F: ComputationalField + UniformRand, RNG: RngCore>(rng: &mut RNG, vspark: &Vspark<F>) -> VsparkTestcaseData<F> {
+        let Vspark{ nx, midx, px, ny, midy, py, h, d, _pd: _} = *vspark;
+        let grp = VsparkMatrixGroup::<F>::rand(rng, nx, px, ny, py, h, d);
+
+        let rd = (0..d).map(|_| F::rand(rng)).collect_vec();
+        let rx = (0..r_size(nx, px)).map(|_| F::rand(rng)).collect_vec();
+        let ry = (0..r_size(ny, py)).map(|_| F::rand(rng)).collect_vec();
+        let mut r = rd.clone();
+        r.extend_from_slice(&rx);
+        r.extend_from_slice(&ry);
+
+        let tau_table_x = tau::sqrt_decomposition::tables(nx, px, midx, &rx);
+        let tau_table_y = tau::sqrt_decomposition::tables(ny, py, midy, &ry);
+        let e_poly = grp.e_poly(&tau_table_x, &tau_table_y, d);
+
+        let e_claim_before = EvalClaim {
+            ev: evaluate_multivar(&e_poly, &rd),
+            point: r,
+        };
+
+        VsparkTestcaseData {
+            prover_input: VsparkProverInput {
+                e_poly: e_poly.clone(),
+                c_poly: grp.c_poly(h, d),
+                i_poly: grp.i_poly(h, d),
+                x_poly: grp.x_poly(h, d),
+                y_poly: grp.y_poly(h, d),
+                _pd: Default::default(),
+            },
+            eval_claim: e_claim_before,
+        }
+    }
+    pub fn run_sqrt_vspark<F: ComputationalField>(vspark: &Vspark<F>, input: VsparkTestcaseData<F>) {
+        let span = info_span!("sqrt").entered();
+        let mut transcript_p =
+            ProofTranscript::start_prover("asd".as_bytes());
+        let (output_claims, _) =
+            vspark.prove::<Vspark<_>>(&mut transcript_p, input.eval_claim.clone(), input.prover_input);
+        let proof = transcript_p.end();
+        let mut transcript_v = ProofTranscript::start_verifier("asd".as_bytes(), proof);
+        let expected_output_claims = vspark.verify(&mut transcript_v, input.eval_claim);
+        assert_eq!(output_claims, expected_output_claims);
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::{Vspark, VsparkProverInput};
@@ -1129,23 +1189,15 @@ mod tests {
     use tracing_subscriber::layer::{Layered, SubscriberExt};
     use tracing_subscriber::util::{SubscriberInitExt, TryInitError};
     use tracing_subscriber::{fmt, prelude::*, reload, EnvFilter, Layer, Registry};
+    use crate::components::vspark::sqrt_vspark::bench_parts::build_sqrt_vspark_data;
+    use crate::test_utils::data::load_or_generate_data;
 
     #[test]
-    fn test_vspark() {
-        // // Create a tracing layer with the configured tracer
-        // let tracer = tracing_subscriber::registry();
-        // let tracer = tracer
-        //     .with(
-        //         EnvFilter::builder()
-        //             .with_default_directive(LevelFilter::INFO.into())
-        //             .from_env_lossy(),
-        //     )
-        //     .with(tracing_span_tree::span_tree().aggregate(true))
-        //     .init();
-
+    fn test_sqrt_vspark() {
         let rng = &mut ark_std::test_rng();
-        let span = info_span!("test").entered();
+        let span = info_span!("test_sqrt_vspark").entered();
         for _ in 0..10 {
+            let span = info_span!("generation").entered();
             let (nx, midx, px, ny, midy, py, h, d) = (5, 3, 3, 5, 2, 4, 3, 3);
             let grp = VsparkMatrixGroup::<F>::rand(rng, nx, px, ny, py, h, d);
             let vspark = Vspark::<F>::new(nx, midx, px, ny, midy, py, h, d);
@@ -1174,17 +1226,58 @@ mod tests {
                 y_poly: grp.y_poly(h, d),
                 _pd: Default::default(),
             };
-
+            span.exit();
+            let span = info_span!("payload").entered();
             let mut transcript_p =
                 ManualTestTranscript::new((0..1000).map(|_| F::rand(rng)).collect_vec());
             let (output_claims, _) =
                 vspark.prove::<Vspark<_>>(&mut transcript_p, e_claim_before.clone(), prover_input);
             let proof = transcript_p.end();
             let mut transcript_v = transcript_p;
-
             let expected_output_claims = vspark.verify(&mut transcript_v, e_claim_before.clone());
             transcript_v.end();
             assert_eq!(output_claims, expected_output_claims);
+        }
+    }
+
+
+    #[cfg(feature = "testbench")]
+    #[test]
+    fn bench_vspark() {
+        // Create a tracing layer with the configured tracer
+        crate::test_utils::tracing::setup();
+
+        let rng = &mut ark_std::test_rng();
+        let span = info_span!("test").entered();
+        let span = info_span!("generation").entered();
+        let (nx, midx, px, ny, midy, py, h, d) = (
+            20,
+            11,
+            4,
+            20,
+            11,
+            4,
+            3,
+            10,
+        );
+        let vspark = Vspark::<F>::new(nx, midx, px, ny, midy, py, h, d);
+        let test_data = load_or_generate_data("sqrt-vspark", build_sqrt_vspark_data, rng, &vspark);
+
+        span.exit();
+        {
+            let span = info_span!("payload").entered();
+            {
+                let span = info_span!("sqrt").entered();
+                let mut transcript_p =
+                    ManualTestTranscript::new((0..1000).map(|_| F::rand(rng)).collect_vec());
+                let (output_claims, _) =
+                    vspark.prove::<Vspark<_>>(&mut transcript_p, test_data.eval_claim.clone(), test_data.prover_input);
+                let proof = transcript_p.end();
+                let mut transcript_v = transcript_p;
+                let expected_output_claims = vspark.verify(&mut transcript_v, test_data.eval_claim);
+                transcript_v.end();
+                assert_eq!(output_claims, expected_output_claims);
+            }
         }
     }
 }

@@ -2,7 +2,11 @@
 
 // use super::board::{Sig, TSupportsFormalArithOps, TSupportsFormalType, TSupportsFormalVTranscript};
 
-use crate::common::wrapper::TFelt;
+use std::thread;
+use ark_ff::{BigInteger, PrimeField};
+use ark_std::iterable::Iterable;
+use merlin::Transcript;
+use crate::common::wrapper::{ComputationalField, ComputationalFieldSerialisation, TFelt, TFeltUtil};
 
 // /// Entry point trait that passes through all interesting operations (so they can be conveniently called without fully qualified syntax).
 // /// Due to "where" semantics, methods are unavailable unless an actual implementor trait is present.
@@ -59,9 +63,117 @@ pub trait TArithmeticTranscript<F: TFelt> : TTranscriptInterface + TTranscriptSu
 
 // impl<F: TPrimeField, Dialect: TFormalArithmeticDialect<F>> TArithmeticDialect<Sig<F, Dialect>> for Dialect {}
 
+#[derive(Debug, Eq, PartialEq, Copy, Clone)]
+enum ProofTranscriptMode {
+    Prover,
+    Verifier,
+}
+pub struct ProofTranscript {
+    merlin_transcript: Transcript,
+    proof: Option<Vec<u8>>,
+    ctr: usize,
+    mode: ProofTranscriptMode,
+}
+
+impl ProofTranscript {
+    pub fn start_prover(sep: &'static[u8]) -> Self {
+        let merlin_transcript = Transcript::new(sep);
+        let proof = vec![];
+        Self { merlin_transcript, proof: Some(proof), ctr: 0, mode: ProofTranscriptMode::Prover }
+    }
+    pub fn end(mut self) -> Vec<u8> {
+        assert_eq!(self.mode, ProofTranscriptMode::Prover);
+        self.proof.take().unwrap()
+    }
+    pub fn start_verifier(sep: &'static[u8], proof: Vec<u8>) -> Self {
+        let merlin_transcript = Transcript::new(sep);
+        Self { merlin_transcript, proof: Some(proof), ctr: 0, mode: ProofTranscriptMode::Verifier }
+    }
+}
+
+impl Drop for ProofTranscript {
+    fn drop(&mut self) {
+        if !thread::panicking() {
+            match self.mode {
+                ProofTranscriptMode::Prover => {
+                    assert!(self.proof.is_none());
+                }
+                ProofTranscriptMode::Verifier => {
+                    assert_eq!(self.ctr, self.proof.as_ref().unwrap().len());
+                }
+            }
+        }
+    }
+}
+
+impl TTranscriptInterface for ProofTranscript {}
+
+impl<F: ComputationalField> TTranscriptSupports<F> for ProofTranscript {
+    fn _challenge(&mut self) -> F {
+        let mut ret = vec![0u8; F::CHALLENGE_BYTES];
+        self.merlin_transcript.challenge_bytes(&[], &mut ret);
+        F::deserialize_challenge(&ret)
+    }
+
+    fn _read(&mut self) -> F {
+        let bytesize = F::num_bytes();
+        match self.mode {
+            ProofTranscriptMode::Prover => panic!(),
+            ProofTranscriptMode::Verifier => {
+                assert!(self.ctr + bytesize <= self.proof.as_ref().unwrap().len(), "Out of bounds");
+                let msg = &self.proof.as_ref().unwrap()[self.ctr .. self.ctr + bytesize];
+                self.ctr += bytesize;
+                self.merlin_transcript.append_message(&[], msg);
+                F::deserialize(msg)
+            }
+        }
+    }
+
+    fn _write(&mut self, value: &F) {
+        let mult = F::num_bytes();
+        let mut writer = Vec::with_capacity(mult);
+        value.serialize(&mut writer);
+        match self.mode {
+            ProofTranscriptMode::Verifier => panic!(),
+            ProofTranscriptMode::Prover => {
+                self.merlin_transcript.append_message(&[], &writer);
+                self.proof.as_mut().unwrap().extend_from_slice(&writer);
+            }
+        }
+    }
+
+    fn _unconstrained_read(&mut self) -> F {
+        let bytesize = F::num_bytes();
+        match self.mode {
+            ProofTranscriptMode::Prover => panic!(),
+            ProofTranscriptMode::Verifier => {
+                assert!(self.ctr + bytesize <= self.proof.as_ref().unwrap().len(), "Out of bounds");
+                let msg = &self.proof.as_ref().unwrap()[self.ctr .. self.ctr + bytesize];
+                self.ctr += bytesize;
+                F::deserialize(msg)
+            }
+        }
+    }
+
+    fn _unconstrained_write(&mut self, value: &F) {
+        let mult = F::num_bytes();
+        let mut writer = Vec::with_capacity(mult);
+        value.serialize(&mut writer);
+        match self.mode {
+            ProofTranscriptMode::Verifier => panic!(),
+            ProofTranscriptMode::Prover => {
+                self.proof.as_mut().unwrap().extend_from_slice(&writer);
+            }
+        }
+    }
+}
+
+impl<F: ComputationalField> TArithmeticTranscript<F> for ProofTranscript {}
+
 
 #[cfg(test)]
 pub mod tests {
+    use crate::common::wrapper::ComputationalFieldSerialisation;
     use super::*;
 
     pub struct ManualTestTranscript<F: TFelt> {
@@ -112,4 +224,14 @@ pub mod tests {
     }
 
     impl<F: TFelt> TArithmeticTranscript<F> for ManualTestTranscript<F> {}
+
+    #[test]
+    fn test_serialization() {
+        use ark_bn254::Fq as F;
+        let mult = F::num_bytes();
+        let mut writer = Vec::with_capacity(mult);
+        F::zero().serialize(&mut writer);
+        assert_eq!(F::deserialize(&writer), F::zero());
+
+    }
 }
