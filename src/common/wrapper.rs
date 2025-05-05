@@ -2,11 +2,12 @@ use std::fmt::Debug;
 use std::iter::Sum;
 use std::ops::{Add, AddAssign, Div, DivAssign, Mul, MulAssign, Neg, Sub, SubAssign};
 
-use ark_ff::PrimeField;
+use ark_ff::{BigInteger, PrimeField};
 use ark_serialize::{CanonicalDeserialize, CanonicalSerialize};
+use serde::{Deserialize, Serialize};
 
-pub trait ComputationalField: TFelt + From<u64> + CanonicalSerialize + CanonicalDeserialize + Send + Sync + PartialEq + Eq {}
-impl<T: TFelt + From<u64> + CanonicalSerialize + CanonicalDeserialize + Send + Sync + PartialEq + Eq> ComputationalField for T {}
+pub trait ComputationalField: TFelt + From<u64> + CanonicalSerialize + CanonicalDeserialize + Send + Sync + PartialEq + Eq + ComputationalFieldSerialisation {}
+impl<T: TFelt + From<u64> + CanonicalSerialize + CanonicalDeserialize + Send + Sync + PartialEq + Eq + ComputationalFieldSerialisation> ComputationalField for T {}
 
 pub trait TFeltUtil : Sized {
     type Constants : ComputationalField;
@@ -16,6 +17,14 @@ pub trait TFeltUtil : Sized {
     fn require(&self);
     fn zero() -> Self;
     fn one() -> Self;
+}
+
+pub trait ComputationalFieldSerialisation: Sized + CanonicalSerialize + CanonicalDeserialize {
+    const CHALLENGE_BYTES: usize;
+    fn num_bytes() -> usize;
+    fn deserialize_challenge(reader: &[u8]) -> Self;
+    fn deserialize(reader: &[u8]) -> Self;
+    fn serialize(&self, writer: &mut Vec<u8>);
 }
 
 pub trait TFelt:
@@ -102,6 +111,26 @@ impl<U: PrimeField> Invert for U {
 
     fn invert(self) -> U {
         self.inverse().unwrap()
+    }
+}
+impl<U: PrimeField> ComputationalFieldSerialisation for U {
+    const CHALLENGE_BYTES: usize = U::BigInt::NUM_LIMBS * 8;
+
+    fn num_bytes() -> usize {
+        U::compressed_size(&U::zero())
+    }
+
+    fn deserialize_challenge(reader: &[u8]) -> Self {
+        assert_eq!(reader.len(), Self::CHALLENGE_BYTES, "wrong challenge bytelen");
+        U::from_le_bytes_mod_order(&reader)
+    }
+
+    fn deserialize(reader: &[u8]) -> Self {
+        U::deserialize_compressed(reader).unwrap()
+    }
+
+    fn serialize(&self, writer: &mut Vec<u8>) {
+        self.serialize_compressed(writer).unwrap();
     }
 }
 

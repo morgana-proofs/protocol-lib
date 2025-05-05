@@ -185,9 +185,13 @@ pub fn gamma_rlc<F: TFelt>(gamma: F, vals: &[F]) -> F {
     ret
 }
 
+pub fn eq_eval_single<F: TFelt>(x1: &F, x2: &F) -> F {
+    F::one() - x1 - x2 + (*x1 * *x2).double()
+}
+
 pub fn eq_eval<F: TFelt>(p1: &[F], p2: &[F]) -> F {
     p1.iter().zip_eq(p2.iter()).map(|(x1, x2)| {
-        F::one() - x1 - x2 + (*x1 * *x2).double()
+        eq_eval_single(x1, x2)
     })
         .fold(F::one(), |acc, x| acc * x)
 }

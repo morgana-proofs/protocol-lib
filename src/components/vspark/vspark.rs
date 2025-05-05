@@ -3,6 +3,7 @@ use std::iter::once;
 use std::marker::PhantomData;
 use std::ops::Index;
 use ark_ff::PrimeField;
+use ark_serialize::{CanonicalDeserialize, CanonicalSerialize};
 use ark_std::iterable::Iterable;
 use ark_std::log2;
 use itertools::{repeat_n, Itertools};
@@ -16,11 +17,11 @@ use crate::components::sumcheck::dense_eq::eq_eval;
 use crate::components::sumcheck::generic::SumcheckProtocol;
 use crate::components::sumcheck::multi_dense_eq::{MultiDenseEqSumcheck, MultiPointEvalClaim, MultiPointEvalClaimPart};
 use crate::components::sumcheck::sumcheckable::Sumcheckable;
-use crate::components::vspark::matrix::{tau::no_decompositon::at_point, tau::no_decompositon::table, r_size, tau};
+use crate::components::vspark::matrix::{tau::no_decomposition::at_point, tau::no_decomposition::table, r_size, tau};
 use crate::transcript::transcript::{TArithmeticTranscript, TTranscriptInterface};
 use crate::protocol::component::{TProtocol, TProverImpl};
 use tracing::{info_span, instrument};
-
+use serde::{Deserialize, Serialize};
 
 pub struct Vspark<F: TFelt> {
     d: usize,  // matrix number logsize
@@ -33,7 +34,7 @@ pub struct Vspark<F: TFelt> {
 }
 
 impl<F: TFelt> Vspark<F> {
-    fn new(nx: usize, px: usize, ny: usize, py: usize, h: usize, d: usize) -> Self {
+    pub(crate) fn new(nx: usize, px: usize, ny: usize, py: usize, h: usize, d: usize) -> Self {
         Self {
             d,
             h,
@@ -46,17 +47,18 @@ impl<F: TFelt> Vspark<F> {
     }
 
     fn compute_tau(n: usize, p: usize, x: &[F], r: &[F]) -> F {
-        tau::no_decompositon::at_point(n, p, x, r)
+        tau::no_decomposition::at_point(n, p, x, r)
     }
 }
 
-pub struct VsparkProverInput<F: TFelt> {
-    e_poly: Vec<F>,
-    c_poly: Vec<F>,
-    i_poly: Vec<usize>,
-    x_poly: Vec<usize>,
-    y_poly: Vec<usize>,
-    _pd: PhantomData<F>
+#[derive(Clone, CanonicalSerialize, CanonicalDeserialize)]
+pub struct VsparkProverInput<F: ComputationalField + Sync + Send> {
+    pub e_poly: Vec<F>,
+    pub c_poly: Vec<F>,
+    pub i_poly: Vec<usize>,
+    pub x_poly: Vec<usize>,
+    pub y_poly: Vec<usize>,
+    pub _pd: PhantomData<F>
 }
 
 pub struct VsparkProverOutput<F: TFelt> {
@@ -219,7 +221,7 @@ impl<F: ComputationalField, Transcript: TArithmeticTranscript<F>> TProverImpl<Tr
             LookupType::Indexed(protocol.d, protocol.h + protocol.d),
         ]);
 
-        let tau_table_x = tau::no_decompositon::table(protocol.nx, protocol.px, r_x);
+        let tau_table_x = tau::no_decomposition::table(protocol.nx, protocol.px, r_x);
         assert_eq!(tau_table_x.len(), 1 << protocol.nx + 2);
         let mut tau_accesses_x = tau_table_x.iter().map(|_| F::zero()).collect::<Vec<_>>();
         let tau_values_x = x_poly.iter().map(|idx| {
@@ -227,7 +229,7 @@ impl<F: ComputationalField, Transcript: TArithmeticTranscript<F>> TProverImpl<Tr
             tau_table_x[*idx]
         }).collect::<Vec<_>>();
 
-        let tau_table_y = tau::no_decompositon::table(protocol.ny, protocol.py, r_y);
+        let tau_table_y = tau::no_decomposition::table(protocol.ny, protocol.py, r_y);
         assert_eq!(tau_table_y.len(), 1 << protocol.ny + 2);
         let mut tau_accesses_y = tau_table_y.iter().map(|_| F::zero()).collect::<Vec<_>>();
         let tau_values_y = y_poly.iter().map(|idx| {
@@ -404,7 +406,7 @@ mod tests {
     use tracing::info_span;
     use crate::common::claims::EvalClaim;
     use crate::common::math::evaluate_multivar;
-    use crate::components::vspark::matrix::{tau::no_decompositon::table, r_size, VsparkMatrixGroup};
+    use crate::components::vspark::matrix::{tau::no_decomposition::table, r_size, VsparkMatrixGroup};
     use crate::protocol::component::TProtocol;
     use crate::transcript::transcript::tests::ManualTestTranscript;
 
@@ -416,17 +418,10 @@ mod tests {
 
     #[test]
     fn test_vspark() {
-        // Create a tracing layer with the configured tracer
-        let tracer = tracing_subscriber::registry();
-        let tracer = tracer
-            .with(EnvFilter::builder()
-                .with_default_directive(LevelFilter::INFO.into())
-                .from_env_lossy())
-            .with(tracing_span_tree::span_tree().aggregate(true))
-            .init();
+        crate::test_utils::tracing::setup();
 
         let rng = &mut ark_std::test_rng();
-        let span = info_span!("test").entered();
+        let span = info_span!("test_vspark").entered();
         for _ in 0..10 {
             let (nx, px, ny, py, h, d) = (
                 5,

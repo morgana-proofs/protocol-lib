@@ -22,6 +22,8 @@ sha2 = "0.10.8"
 tracing = "0.1.41"
 tracing-subscriber = { version = "0.3.19", features = ["env-filter"] }
 tracing-span-tree = "0.1.1"
+criterion = "0.5.1"
+serde = { version = "1.0.219", features = ["derive"] }
 
 [profile.rel-with-debinfo]
 inherits = "release"
@@ -29,6 +31,11 @@ debug = true
 
 [features]
 parallel = []
+testbench = []
 default = [
 #    "parallel"
 ]
+
+[[bench]]
+name = "sqrt_vspark"
+harness = false
