@@ -223,27 +223,27 @@ impl<F: ComputationalField, Fun: AlgFn<F>, Transcript: TArithmeticTranscript<F>>
     type ProverOutput = ();
 
     #[instrument(name="DenseEqSumcheck::prove", level="info", skip_all)]
-    fn _prove(protocol: &Self::Verifier, ctx: &mut Transcript, claims: <Self as TProtocol<Transcript>>::ClaimsBefore, advice: Self::ProverInput) -> (<Self as TProtocol<Transcript>>::ClaimsAfter, Self::ProverOutput) {
+    fn prove(&self, ctx: &mut Transcript, claims: <Self as TProtocol<Transcript>>::ClaimsBefore, advice: Self::ProverInput) -> (<Self as TProtocol<Transcript>>::ClaimsAfter, Self::ProverOutput) {
         let gamma = ctx.challenge();
         let SinglePointClaims { point: input_point, evs } = claims;
         let so = DenseEqSumcheckable::new(
             advice,
-            protocol.f.clone(),
+            self.f.clone(),
             input_point,
             evs,
         );
 
         let so = so.rlc(gamma);
 
-        let generic_protocol_config = SumcheckProtocol::new(
-            EqWrapper::new(GammaWrapper::new(protocol.f.clone(), gamma.clone())),
-            protocol.num_vars,
+        let generic_protocol_config = SumcheckGenericProverImpl::new(
+            EqWrapper::new(GammaWrapper::new(self.f.clone(), gamma.clone())),
+            self.num_vars,
         );
 
         let (
             EvalClaim{point: output_point, ..},
             mut poly_evs,
-        ) = generic_protocol_config.prove::<SumcheckGenericProverImpl<_, _, _>>(
+        ) = generic_protocol_config.prove(
             ctx,
             SumClaim(so.claim),
             so,
@@ -312,7 +312,7 @@ mod tests {
 
         let sumcheck = DenseEqSumcheck::new(f, logsize);
 
-        let (output_claims, _) = sumcheck.prove::<DenseEqSumcheck<_,_,>>(&mut transcript_p, ev_claims.clone(), polys.clone());
+        let (output_claims, _) = sumcheck.prove(&mut transcript_p, ev_claims.clone(), polys.clone());
 
         let proof = transcript_p.end();
 

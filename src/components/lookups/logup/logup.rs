@@ -221,10 +221,10 @@ impl<F: ComputationalField, Transcript: TArithmeticTranscript<F>> TProverImpl<Tr
     type ProverOutput = ();
 
     #[instrument(name="LogupMainphase::prove", level="info", skip_all)]
-    fn _prove(protocol: &Self::Verifier, ctx: &mut Transcript, claims: <Self::Verifier as TProtocol<Transcript>>::ClaimsBefore, advice: Self::ProverInput) -> (<Self::Verifier as TProtocol<Transcript>>::ClaimsAfter, Self::ProverOutput) {
+    fn prove(&self, ctx: &mut Transcript, claims: <Self::Verifier as TProtocol<Transcript>>::ClaimsBefore, advice: Self::ProverInput) -> (<Self::Verifier as TProtocol<Transcript>>::ClaimsAfter, Self::ProverOutput) {
         let f = LogupLayerFn::<F>::new();
 
-        let (mut witness, [num, denom]) = protocol.make_witness(advice);
+        let (mut witness, [num, denom]) = self.make_witness(advice);
 
         assert!(denom != F::zero());
         assert!(num == denom.clone() * claims.0);
@@ -235,7 +235,7 @@ impl<F: ComputationalField, Transcript: TArithmeticTranscript<F>> TProverImpl<Tr
 
 
 
-        let mut logsizes = protocol.logsizes.clone();
+        let mut logsizes = self.logsizes.clone();
         let mut curr_logsize = 0;
         let mut running_claim = SinglePointClaims{ point: vec![], evs: vec![num, denom] };
         let mut accumulated_claims = vec![];
@@ -253,14 +253,14 @@ impl<F: ComputationalField, Transcript: TArithmeticTranscript<F>> TProverImpl<Tr
                 let [advice_r_0, advice_r_1] = witness.pop().unwrap();
                 let [advice_l_0, advice_l_1] = witness.pop().unwrap();
                 let advice = vec![advice_l_0, advice_l_1, advice_r_0, advice_r_1];
-                let (claim_4, _) = proto.prove::<DenseEqSumcheck<_,_,>>(
+                let (claim_4, _) = proto.prove(
                     ctx,
                     running_claim.clone(),
                     advice
                 );
 
                 if *incoming_logsize == curr_logsize {
-                    if (logsizes.len() == 2 && !protocol.do_initial_split) || (logsizes.len() == 1 && protocol.do_initial_split) {
+                    if (logsizes.len() == 2 && !self.do_initial_split) || (logsizes.len() == 1 && self.do_initial_split) {
                         break claim_4
                     }
                     running_claim = SinglePointClaims{ point: claim_4.point.clone(), evs: vec![claim_4.evs[0], claim_4.evs[1]] };
@@ -268,19 +268,19 @@ impl<F: ComputationalField, Transcript: TArithmeticTranscript<F>> TProverImpl<Tr
                     logsizes.pop();
                 } else {
                     let split = SplitAt::new(SplitIdx::HI(0), 2);
-                    (running_claim, _) = split.prove::<SplitAt<_,>>(ctx, claim_4, ());
+                    (running_claim, _) = split.prove(ctx, claim_4, ());
                     curr_logsize += 1;
                 }
             };
 
-        if protocol.do_initial_split {
+        if self.do_initial_split {
             accumulated_claims.push(tmp);
         } else {
             accumulated_claims.push(SinglePointClaims{ point: tmp.point.clone(), evs: vec![tmp.evs[2], tmp.evs[3]] });
             accumulated_claims.push(SinglePointClaims{ point: tmp.point.clone(), evs: vec![tmp.evs[0], tmp.evs[1]] });
         }
 
-        accumulated_claims = protocol.input_permutation.iter()
+        accumulated_claims = self.input_permutation.iter()
             .zip(
                 accumulated_claims
                     .into_iter()
@@ -462,7 +462,7 @@ impl<F: ComputationalField, Transcript: TArithmeticTranscript<F>> TProverImpl<Tr
     type ProverOutput = ();
 
     #[instrument(name="Logup::prove", level="info", skip_all)]
-    fn _prove(protocol: &Self::Verifier, ctx: &mut Transcript, claims: <Self::Verifier as TProtocol<Transcript>>::ClaimsBefore, advice: Self::ProverInput) -> (<Self::Verifier as TProtocol<Transcript>>::ClaimsAfter, Self::ProverOutput) {
+    fn prove(&self, ctx: &mut Transcript, claims: <Self::Verifier as TProtocol<Transcript>>::ClaimsBefore, advice: Self::ProverInput) -> (<Self::Verifier as TProtocol<Transcript>>::ClaimsAfter, Self::ProverOutput) {
         let max_table_size = advice.iter().filter_map(|x| match x {
             LookupInput::Indexed(IndexedLookupInput{ table, .. }) => Some(table.len()),
             _ => None,
@@ -513,7 +513,7 @@ impl<F: ComputationalField, Transcript: TArithmeticTranscript<F>> TProverImpl<Tr
             }
         }).flatten().collect_vec();
 
-        let mainphase = LogupMainphase::new(protocol.lookups.iter().map(|lt| match lt {
+        let mainphase = LogupMainphase::new(self.lookups.iter().map(|lt| match lt {
             LookupType::Indexed(table, lookup) => {
                 [table, lookup]
             }
@@ -521,7 +521,7 @@ impl<F: ComputationalField, Transcript: TArithmeticTranscript<F>> TProverImpl<Tr
                 [table, lookup]
             }
         }).flatten().cloned().collect_vec());
-        let (claims, _) = mainphase.prove::<LogupMainphase<_,>>(ctx, SumClaim(F::zero()), data);
+        let (claims, _) = mainphase.prove(ctx, SumClaim(F::zero()), data);
         let claims = claims.into_iter().chunks(2).into_iter().enumerate().zip(advice).map(|((lookup_index, chunk), lookup_type)| {
             let [lc, rc]: [SinglePointClaims<F>; 2] = chunk.collect_vec().try_into().unwrap();
             let ln_claim = lc.evs[0];
@@ -611,7 +611,7 @@ mod tests {
 
             let mut ctx = ManualTestTranscript::new((0..1000).map(|_| F::rand(rng)).collect_vec());
 
-            let (pclaims, _) = logup.prove::<LogupMainphase<_>>(&mut ctx, sum_claim.clone(), data.clone());
+            let (pclaims, _) = logup.prove(&mut ctx, sum_claim.clone(), data.clone());
             ctx.end();
             let vclaims = logup.verify(&mut ctx, sum_claim);
 
@@ -676,7 +676,7 @@ mod tests {
         let proto = Logup::new(lookups);
 
         let mut ctx = ManualTestTranscript::new((0..1000).map(|_| F::rand(rng)).collect_vec());
-        let (pclaims, _) = proto.prove::<Logup<_,>>(&mut ctx, (), data.clone());
+        let (pclaims, _) = proto.prove(&mut ctx, (), data.clone());
         ctx.end();
         let vclaims = proto.verify(&mut ctx, ());
 

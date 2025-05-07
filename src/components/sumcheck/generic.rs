@@ -44,18 +44,27 @@ impl<F: TFelt, Fun: AlgFnSO<F>, Transcript: TArithmeticTranscript<F>> TProtocol<
 }
 
 pub struct SumcheckGenericProverImpl<F: TFelt, Fun: AlgFnSO<F>, S: Sumcheckable<F>> {
+    pub(crate) f: Fun,
+    pub(crate) num_vars: usize,
     _marker: PhantomData<(F, Fun, S)>,
 }
+
+impl<F: TFelt, Fun: AlgFnSO<F>, S: Sumcheckable<F>> SumcheckGenericProverImpl<F, Fun, S> {
+    pub fn new(f: Fun, num_vars: usize) -> Self {
+        Self { f, num_vars, _marker: PhantomData }
+    }
+}
+
 impl<F: ComputationalField, Fun: AlgFnSO<F>, S: Sumcheckable<F>, Transcript: TArithmeticTranscript<F>> TProverImpl<Transcript> for SumcheckGenericProverImpl<F, Fun, S> {
     type Verifier = SumcheckProtocol<F, Fun>;
     type ProverInput = S;
     type ProverOutput = Vec<F>; // final evals
 
-    fn _prove(protocol: &Self::Verifier, ctx: &mut Transcript, claims: <Self::Verifier as TProtocol<Transcript>>::ClaimsBefore, mut sumcheckable: Self::ProverInput) -> (<Self::Verifier as TProtocol<Transcript>>::ClaimsAfter, Self::ProverOutput) {
-        let d = protocol.f.deg();
+    fn prove(&self, ctx: &mut Transcript, claims: <Self::Verifier as TProtocol<Transcript>>::ClaimsBefore, mut sumcheckable: Self::ProverInput) -> (<Self::Verifier as TProtocol<Transcript>>::ClaimsAfter, Self::ProverOutput) {
+        let d = self.f.deg();
         let mut sum_claim = claims.0;
         let mut rs = vec![];
-        for i in 0..protocol.num_vars {
+        for i in 0..self.num_vars {
             let poly = sumcheckable.unipoly();
             let (_sum_claim, compressed_poly) = compress(&poly);
             assert!(_sum_claim == sum_claim);
@@ -68,7 +77,7 @@ impl<F: ComputationalField, Fun: AlgFnSO<F>, S: Sumcheckable<F>, Transcript: TAr
         }
 //        rs.reverse();
         let final_evals = sumcheckable.final_evals();
-        debug_assert_eq!(protocol.f.exec(&final_evals), sum_claim, "Final evals are passed as prover output for last round postprocess");
+        debug_assert_eq!(self.f.exec(&final_evals), sum_claim, "Final evals are passed as prover output for last round postprocess");
         (EvalClaim{ev: sum_claim, point: rs}, final_evals)
     }
 }

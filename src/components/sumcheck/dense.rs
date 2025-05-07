@@ -43,12 +43,12 @@ impl<F: ComputationalField, Fun: AlgFnSO<F>, Transcript: TArithmeticTranscript<F
     type ProverOutput = ();
 
     #[instrument(name="DenseSumCheck::prove", level="info", skip_all)]
-    fn _prove(protocol: &Self::Verifier, ctx: &mut Transcript, claims: <Self::Verifier as TProtocol<Transcript>>::ClaimsBefore, advice: Self::ProverInput) -> (<Self::Verifier as TProtocol<Transcript>>::ClaimsAfter, Self::ProverOutput) {
-        let generic_protocol_config = SumcheckProtocol::new(protocol.f.clone(), protocol.num_vars);
+    fn prove(&self, ctx: &mut Transcript, claims: <Self::Verifier as TProtocol<Transcript>>::ClaimsBefore, advice: Self::ProverInput) -> (<Self::Verifier as TProtocol<Transcript>>::ClaimsAfter, Self::ProverOutput) {
+        let generic_protocol_config = SumcheckGenericProverImpl::new(self.f.clone(), self.num_vars);
 
-        let so = DenseSumcheckableSO::new(advice, protocol.f.clone(),  protocol.num_vars, claims.0.clone());
+        let so = DenseSumcheckableSO::new(advice, self.f.clone(),  self.num_vars, claims.0.clone());
 
-        let (EvalClaim {ev, point}, poly_evs) = generic_protocol_config.prove::<SumcheckGenericProverImpl<_, _, _>>(ctx, claims, so);
+        let (EvalClaim {ev, point}, poly_evs) = generic_protocol_config.prove(ctx, claims, so);
 
         poly_evs.iter().for_each(|ev| ctx.write(ev));
 
@@ -103,7 +103,7 @@ mod tests {
 
         let claim = SumClaim(output.iter().sum());
         let sumcheck = DenseSumcheck::new(f, logsize);
-        let (output_claims, _) = sumcheck.prove::<DenseSumcheck<_,_,>>(&mut transcript_p, claim.clone(), polys.clone());
+        let (output_claims, _) = sumcheck.prove(&mut transcript_p, claim.clone(), polys.clone());
         let _proof = transcript_p.end();
         let mut transcript_v = transcript_p;
 

@@ -205,39 +205,39 @@ impl<F: ComputationalField, Transcript: TArithmeticTranscript<F>> TProverImpl<Tr
     type ProverOutput = ();
 
     #[instrument(name="VSpark::prove", level="info", skip_all)]
-    fn _prove(protocol: &Self::Verifier, ctx: &mut Transcript, claims: <Self::Verifier as TProtocol<Transcript>>::ClaimsBefore, advice: Self::ProverInput) -> (<Self::Verifier as TProtocol<Transcript>>::ClaimsAfter, Self::ProverOutput) {
+    fn prove(&self, ctx: &mut Transcript, claims: <Self::Verifier as TProtocol<Transcript>>::ClaimsBefore, advice: Self::ProverInput) -> (<Self::Verifier as TProtocol<Transcript>>::ClaimsAfter, Self::ProverOutput) {
         let VsparkProverInput{ e_poly, c_poly, i_poly, x_poly, y_poly, _pd } = advice;
         let EvalClaim { ev: e_ev_old, point: e_point_old } = claims;
-        let (t, rs) = e_point_old.split_at(protocol.d);
-        let (r_x, rs) = rs.split_at(r_size(protocol.nx, protocol.px));
-        let (r_y, rs) = rs.split_at(r_size(protocol.ny, protocol.py));
+        let (t, rs) = e_point_old.split_at(self.d);
+        let (r_x, rs) = rs.split_at(r_size(self.nx, self.px));
+        let (r_y, rs) = rs.split_at(r_size(self.ny, self.py));
         assert_eq!(rs.len(), 0);
 
 
         let span = info_span!("lookup-inputs").entered();
         let lookup = Logup::new(vec![
-            LookupType::Indexed(protocol.nx + 2, protocol.h + protocol.d),
-            LookupType::Indexed(protocol.ny + 2, protocol.h + protocol.d),
-            LookupType::Indexed(protocol.d, protocol.h + protocol.d),
+            LookupType::Indexed(self.nx + 2, self.h + self.d),
+            LookupType::Indexed(self.ny + 2, self.h + self.d),
+            LookupType::Indexed(self.d, self.h + self.d),
         ]);
 
-        let tau_table_x = tau::no_decomposition::table(protocol.nx, protocol.px, r_x);
-        assert_eq!(tau_table_x.len(), 1 << protocol.nx + 2);
+        let tau_table_x = tau::no_decomposition::table(self.nx, self.px, r_x);
+        assert_eq!(tau_table_x.len(), 1 << self.nx + 2);
         let mut tau_accesses_x = tau_table_x.iter().map(|_| F::zero()).collect::<Vec<_>>();
         let tau_values_x = x_poly.iter().map(|idx| {
             tau_accesses_x[*idx] += F::one();
             tau_table_x[*idx]
         }).collect::<Vec<_>>();
 
-        let tau_table_y = tau::no_decomposition::table(protocol.ny, protocol.py, r_y);
-        assert_eq!(tau_table_y.len(), 1 << protocol.ny + 2);
+        let tau_table_y = tau::no_decomposition::table(self.ny, self.py, r_y);
+        assert_eq!(tau_table_y.len(), 1 << self.ny + 2);
         let mut tau_accesses_y = tau_table_y.iter().map(|_| F::zero()).collect::<Vec<_>>();
         let tau_values_y = y_poly.iter().map(|idx| {
             tau_accesses_y[*idx] += F::one();
             tau_table_y[*idx]
         }).collect::<Vec<_>>();
 
-        let delta_poly = eq_poly(&vec![F::zero(); protocol.d]);
+        let delta_poly = eq_poly(&vec![F::zero(); self.d]);
         let e_adj = e_poly.iter().zip(delta_poly.iter()).map(|(e, d)| *e + d).collect_vec();
 
         let mut accesses_i = e_poly.iter().map(|_| F::zero()).collect::<Vec<_>>();
@@ -276,7 +276,7 @@ impl<F: ComputationalField, Transcript: TArithmeticTranscript<F>> TProverImpl<Tr
         ];
 
         span.exit();
-        let lookup_claims: [_; 3] = lookup.prove::<Logup<_>>(ctx, (), lookup_advice).0.into_iter().map(|c| {
+        let lookup_claims: [_; 3] = lookup.prove(ctx, (), lookup_advice).0.into_iter().map(|c| {
             if let LookupClaim::Indexed(c) = c {
                 c
             } else {
@@ -289,11 +289,11 @@ impl<F: ComputationalField, Transcript: TArithmeticTranscript<F>> TProverImpl<Tr
         let IndexedLookupClaim{ accesses: y_acc, table: tau_y_claim, values: y_pull, indexes: y_claim } = b;
         let IndexedLookupClaim{ accesses: i_acc, table: e_adj_claim_lookup, values: i_pull, indexes: i_claim } = c;
 
-        (tau_x_claim.ev - Self::compute_tau(protocol.nx, protocol.px, &tau_x_claim.point, r_x)).require();
-        (tau_y_claim.ev - Self::compute_tau(protocol.ny, protocol.py, &tau_y_claim.point, r_y)).require();
+        (tau_x_claim.ev - Self::compute_tau(self.nx, self.px, &tau_x_claim.point, r_x)).require();
+        (tau_y_claim.ev - Self::compute_tau(self.ny, self.py, &tau_y_claim.point, r_y)).require();
 
         let span = info_span!("final-prod-inputs").entered();
-        let gamma = (0..protocol.d).map(|_| ctx.challenge()).collect_vec();
+        let gamma = (0..self.d).map(|_| ctx.challenge()).collect_vec();
 
         let e_in_gamma_eval = evaluate_multivar(&e_poly, &gamma);
         ctx.write(&e_in_gamma_eval);
@@ -305,23 +305,23 @@ impl<F: ComputationalField, Transcript: TArithmeticTranscript<F>> TProverImpl<Tr
             values_i.clone(),
             tau_values_x.clone(),
             tau_values_y.clone(),
-            eq_poly(&gamma).into_iter().map(|x| repeat_n(x, (1 << protocol.h))).flatten().collect_vec(),
+            eq_poly(&gamma).into_iter().map(|x| repeat_n(x, (1 << self.h))).flatten().collect_vec(),
         ];
         let e_output = f.map_so(&e_data.iter().map(|v| v.as_ref()).collect_vec());
-        let e_sum = e_output.iter().chunks(1 << protocol.h).into_iter().map(|c| c.fold(F::zero(), |a, b| a + b)).collect_vec();
+        let e_sum = e_output.iter().chunks(1 << self.h).into_iter().map(|c| c.fold(F::zero(), |a, b| a + b)).collect_vec();
         assert_eq!(e_sum, e_poly.iter().zip(eq_poly(&gamma).iter()).map(|(a, b)| *a * b).collect_vec());
 
-        let sumcheck = DenseSumcheck::new(f, protocol.h + protocol.d);
+        let sumcheck = DenseSumcheck::new(f, self.h + self.d);
         span.exit();
 
-        let e_claim_sumcheck: SinglePointClaims<F> = sumcheck.prove::<DenseSumcheck<_,_>>(ctx, SumClaim(e_in_gamma_eval), e_data).0;
+        let e_claim_sumcheck: SinglePointClaims<F> = sumcheck.prove(ctx, SumClaim(e_in_gamma_eval), e_data).0;
 
         let [c_ev_sumcheck, i_pull_ev_sumcheck, x_pull_ev_sumcheck, y_pull_ev_sumcheck, eq_ev_sumcheck] = e_claim_sumcheck.evs.try_into().unwrap();
-        (eq_ev_sumcheck - eq_eval(&gamma, &e_claim_sumcheck.point[protocol.h..])).require();
+        (eq_ev_sumcheck - eq_eval(&gamma, &e_claim_sumcheck.point[self.h..])).require();
 
-        let reducer = MultiDenseEqSumcheck::new(protocol.h + protocol.d);
+        let reducer = MultiDenseEqSumcheck::new(self.h + self.d);
 
-        let mut claims_mess_1 = reducer.prove::<MultiDenseEqSumcheck<_>>(
+        let mut claims_mess_1 = reducer.prove(
             ctx,
             MultiPointEvalClaim::new(
                 vec![
@@ -358,9 +358,9 @@ impl<F: ComputationalField, Transcript: TArithmeticTranscript<F>> TProverImpl<Tr
         (claims_mess_1.evs[4] - claims_mess_1.evs[5]).require();
         (claims_mess_1.evs[7] - claims_mess_1.evs[8]).require();
 
-        let reducer2 = MultiDenseEqSumcheck::new(protocol.d);
+        let reducer2 = MultiDenseEqSumcheck::new(self.d);
 
-        let mut claims_mess_2 = reducer2.prove::<MultiDenseEqSumcheck<_>>(
+        let mut claims_mess_2 = reducer2.prove(
             ctx,
             MultiPointEvalClaim::new(
                 vec![
@@ -372,7 +372,7 @@ impl<F: ComputationalField, Transcript: TArithmeticTranscript<F>> TProverImpl<Tr
                 vec![
                     MultiPointEvalClaimPart::new(0, 1, e_ev_old),
                     MultiPointEvalClaimPart::new(0, 2, e_in_gamma_eval),
-                    MultiPointEvalClaimPart::new(0, 0, e_adj_claim_lookup.ev - eq_eval(&vec![F::zero(); protocol.d], &e_adj_claim_lookup.point)),
+                    MultiPointEvalClaimPart::new(0, 0, e_adj_claim_lookup.ev - eq_eval(&vec![F::zero(); self.d], &e_adj_claim_lookup.point)),
                     MultiPointEvalClaimPart::new(1, 3, i_acc.ev),
                 ],
             ),
@@ -407,7 +407,7 @@ mod tests {
     use crate::common::claims::EvalClaim;
     use crate::common::math::evaluate_multivar;
     use crate::components::vspark::matrix::{tau::no_decomposition::table, r_size, VsparkMatrixGroup};
-    use crate::protocol::component::TProtocol;
+    use crate::protocol::component::{TProtocol, TProverImpl};
     use crate::transcript::transcript::tests::ManualTestTranscript;
 
     use tracing::level_filters::LevelFilter;
@@ -475,7 +475,7 @@ mod tests {
             };
 
             let mut transcript_p = ManualTestTranscript::new((0..1000).map(|_| F::rand(rng)).collect_vec());
-            let (output_claims, _) = vspark.prove::<Vspark<_, >>(&mut transcript_p, e_claim_before.clone(), prover_input);
+            let (output_claims, _) = vspark.prove(&mut transcript_p, e_claim_before.clone(), prover_input);
             let proof = transcript_p.end();
             let mut transcript_v = transcript_p;
 

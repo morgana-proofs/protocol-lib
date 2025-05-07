@@ -488,8 +488,8 @@ impl<F: ComputationalField, Transcript: TArithmeticTranscript<F>> TProverImpl<Tr
     type ProverOutput = ();
 
     #[instrument(name = "VSpark::prove", level = "info", skip_all)]
-    fn _prove(
-        protocol: &Self::Verifier,
+    fn prove(
+        &self,
         ctx: &mut Transcript,
         claims: <Self::Verifier as TProtocol<Transcript>>::ClaimsBefore,
         advice: Self::ProverInput,
@@ -509,33 +509,33 @@ impl<F: ComputationalField, Transcript: TArithmeticTranscript<F>> TProverImpl<Tr
             ev: e_ev_old,
             point: e_point_old,
         } = claims;
-        let (t, rs) = e_point_old.split_at(protocol.d);
-        let (r_x, rs) = rs.split_at(r_size(protocol.nx, protocol.px));
-        let (r_y, rs) = rs.split_at(r_size(protocol.ny, protocol.py));
+        let (t, rs) = e_point_old.split_at(self.d);
+        let (r_x, rs) = rs.split_at(r_size(self.nx, self.px));
+        let (r_y, rs) = rs.split_at(r_size(self.ny, self.py));
         assert_eq!(rs.len(), 0);
 
         let span = info_span!("lookup-inputs").entered();
         let lookup = Logup::new(vec![
-            LookupType::Indexed(protocol.midx, protocol.h + protocol.d),
-            LookupType::Indexed(protocol.midx, protocol.h + protocol.d),
-            LookupType::Indexed(protocol.midx, protocol.h + protocol.d),
-            LookupType::Indexed(protocol.nx + 2 - protocol.midx, protocol.h + protocol.d),
-            LookupType::Indexed(protocol.nx + 2 - protocol.midx, protocol.h + protocol.d),
-            LookupType::Indexed(protocol.nx + 2 - protocol.midx, protocol.h + protocol.d),
-            LookupType::Indexed(protocol.midy, protocol.h + protocol.d),
-            LookupType::Indexed(protocol.midy, protocol.h + protocol.d),
-            LookupType::Indexed(protocol.midy, protocol.h + protocol.d),
-            LookupType::Indexed(protocol.ny + 2 - protocol.midy, protocol.h + protocol.d),
-            LookupType::Indexed(protocol.ny + 2 - protocol.midy, protocol.h + protocol.d),
-            LookupType::Indexed(protocol.ny + 2 - protocol.midy, protocol.h + protocol.d),
-            LookupType::Indexed(protocol.d, protocol.h + protocol.d),
+            LookupType::Indexed(self.midx, self.h + self.d),
+            LookupType::Indexed(self.midx, self.h + self.d),
+            LookupType::Indexed(self.midx, self.h + self.d),
+            LookupType::Indexed(self.nx + 2 - self.midx, self.h + self.d),
+            LookupType::Indexed(self.nx + 2 - self.midx, self.h + self.d),
+            LookupType::Indexed(self.nx + 2 - self.midx, self.h + self.d),
+            LookupType::Indexed(self.midy, self.h + self.d),
+            LookupType::Indexed(self.midy, self.h + self.d),
+            LookupType::Indexed(self.midy, self.h + self.d),
+            LookupType::Indexed(self.ny + 2 - self.midy, self.h + self.d),
+            LookupType::Indexed(self.ny + 2 - self.midy, self.h + self.d),
+            LookupType::Indexed(self.ny + 2 - self.midy, self.h + self.d),
+            LookupType::Indexed(self.d, self.h + self.d),
         ]);
 
         let SqrtSplitTauTable {
             parts: [[x_tau_table_leq_l, x_tau_table_leq_r], [x_tau_table_mid_l, x_tau_table_mid_r], [x_tau_table_ge_l, x_tau_table_ge_r]],
             ..
         } =
-            tau::sqrt_decomposition::tables(protocol.nx, protocol.px, protocol.midx, r_x);
+            tau::sqrt_decomposition::tables(self.nx, self.px, self.midx, r_x);
         let mut x_tau_accesses_l = x_tau_table_leq_l
             .iter()
             .map(|_| F::zero())
@@ -555,8 +555,8 @@ impl<F: ComputationalField, Transcript: TArithmeticTranscript<F>> TProverImpl<Tr
         x_poly
             .iter()
             .for_each(|&idx| {
-                let l_idx = idx % (1 << protocol.midx);
-                let r_idx = idx >> protocol.midx;
+                let l_idx = idx % (1 << self.midx);
+                let r_idx = idx >> self.midx;
                 x_tau_indexes_l.push(F::from(l_idx as u64));
                 x_tau_indexes_r.push(F::from(r_idx as u64));
                 x_tau_accesses_l[l_idx] += F::one();
@@ -573,7 +573,7 @@ impl<F: ComputationalField, Transcript: TArithmeticTranscript<F>> TProverImpl<Tr
             parts: [[y_tau_table_leq_l, y_tau_table_leq_r], [y_tau_table_mid_l, y_tau_table_mid_r], [y_tau_table_ge_l, y_tau_table_ge_r]],
             ..
         } =
-            tau::sqrt_decomposition::tables(protocol.ny, protocol.py, protocol.midy, r_y);
+            tau::sqrt_decomposition::tables(self.ny, self.py, self.midy, r_y);
         let mut y_tau_accesses_l = y_tau_table_leq_l
             .iter()
             .map(|_| F::zero())
@@ -593,8 +593,8 @@ impl<F: ComputationalField, Transcript: TArithmeticTranscript<F>> TProverImpl<Tr
         y_poly
             .iter()
             .for_each(|&idx| {
-                let l_idx = idx % (1 << protocol.midy);
-                let r_idx = idx >> protocol.midy;
+                let l_idx = idx % (1 << self.midy);
+                let r_idx = idx >> self.midy;
                 y_tau_indexes_l.push(F::from(l_idx as u64));
                 y_tau_indexes_r.push(F::from(r_idx as u64));
                 y_tau_accesses_l[l_idx] += F::one();
@@ -607,7 +607,7 @@ impl<F: ComputationalField, Transcript: TArithmeticTranscript<F>> TProverImpl<Tr
                 y_tau_values_ge_r.push(y_tau_table_ge_r[r_idx]);
             });
 
-        let delta_poly = eq_poly(&vec![F::zero(); protocol.d]);
+        let delta_poly = eq_poly(&vec![F::zero(); self.d]);
         let e_adj = e_poly
             .iter()
             .zip(delta_poly.iter())
@@ -685,7 +685,7 @@ impl<F: ComputationalField, Transcript: TArithmeticTranscript<F>> TProverImpl<Tr
         span.exit();
 
         let lookup_claims: [_; 13] = lookup
-            .prove::<Logup<_>>(ctx, (), lookup_advice)
+            .prove(ctx, (), lookup_advice)
             .0
             .into_iter()
             .map(|c| {
@@ -760,7 +760,7 @@ impl<F: ComputationalField, Transcript: TArithmeticTranscript<F>> TProverImpl<Tr
             tau::sqrt_decomposition::parts::mid_l,
             tau::sqrt_decomposition::parts::ge_l,
         ].iter().enumerate() {
-            (x_tau_left_table_claims[i].ev - f(protocol.nx, protocol.px, protocol.midx, &x_tau_left_table_claims[i].point, r_x))
+            (x_tau_left_table_claims[i].ev - f(self.nx, self.px, self.midx, &x_tau_left_table_claims[i].point, r_x))
                 .require();
         }
         for (i, f) in [
@@ -768,7 +768,7 @@ impl<F: ComputationalField, Transcript: TArithmeticTranscript<F>> TProverImpl<Tr
             tau::sqrt_decomposition::parts::mid_r,
             tau::sqrt_decomposition::parts::ge_r,
         ].iter().enumerate() {
-            (x_tau_right_table_claims[i].ev - f(protocol.nx, protocol.px, protocol.midx, &x_tau_right_table_claims[i].point, r_x))
+            (x_tau_right_table_claims[i].ev - f(self.nx, self.px, self.midx, &x_tau_right_table_claims[i].point, r_x))
                 .require();
         }
         for (i, f) in [
@@ -776,7 +776,7 @@ impl<F: ComputationalField, Transcript: TArithmeticTranscript<F>> TProverImpl<Tr
             tau::sqrt_decomposition::parts::mid_l,
             tau::sqrt_decomposition::parts::ge_l,
         ].iter().enumerate() {
-            (y_tau_left_table_claims[i].ev - f(protocol.ny, protocol.py, protocol.midy, &y_tau_left_table_claims[i].point, r_y))
+            (y_tau_left_table_claims[i].ev - f(self.ny, self.py, self.midy, &y_tau_left_table_claims[i].point, r_y))
                 .require();
         }
         for (i, f) in [
@@ -784,12 +784,12 @@ impl<F: ComputationalField, Transcript: TArithmeticTranscript<F>> TProverImpl<Tr
             tau::sqrt_decomposition::parts::mid_r,
             tau::sqrt_decomposition::parts::ge_r,
         ].iter().enumerate() {
-            (y_tau_right_table_claims[i].ev - f(protocol.ny, protocol.py, protocol.midy, &y_tau_right_table_claims[i].point, r_y))
+            (y_tau_right_table_claims[i].ev - f(self.ny, self.py, self.midy, &y_tau_right_table_claims[i].point, r_y))
                 .require();
         }
 
         let span = info_span!("final-prod-inputs").entered();
-        let gamma = (0..protocol.d).map(|_| ctx.challenge()).collect_vec();
+        let gamma = (0..self.d).map(|_| ctx.challenge()).collect_vec();
 
         let e_in_gamma_eval = evaluate_multivar(&e_poly, &gamma);
         ctx.write(&e_in_gamma_eval);
@@ -801,7 +801,7 @@ impl<F: ComputationalField, Transcript: TArithmeticTranscript<F>> TProverImpl<Tr
             values_i.clone(),
             eq_poly(&gamma)
                 .into_iter()
-                .map(|x| repeat_n(x, (1 << protocol.h)))
+                .map(|x| repeat_n(x, (1 << self.h)))
                 .flatten()
                 .collect_vec(),
             x_tau_values_leq_l.clone(),
@@ -820,7 +820,7 @@ impl<F: ComputationalField, Transcript: TArithmeticTranscript<F>> TProverImpl<Tr
         let e_output = f.map_so(&e_data.iter().map(|v| v.as_ref()).collect_vec());
         let e_sum = e_output
             .iter()
-            .chunks(1 << protocol.h)
+            .chunks(1 << self.h)
             .into_iter()
             .map(|c| c.fold(F::zero(), |a, b| a + b))
             .collect_vec();
@@ -833,11 +833,11 @@ impl<F: ComputationalField, Transcript: TArithmeticTranscript<F>> TProverImpl<Tr
                 .collect_vec()
         );
 
-        let sumcheck = DenseSumcheck::new(f, protocol.h + protocol.d);
+        let sumcheck = DenseSumcheck::new(f, self.h + self.d);
         span.exit();
 
         let e_claim_sumcheck: SinglePointClaims<F> = sumcheck
-            .prove::<DenseSumcheck<_, _>>(ctx, SumClaim(e_in_gamma_eval), e_data)
+            .prove(ctx, SumClaim(e_in_gamma_eval), e_data)
             .0;
 
         let [
@@ -858,12 +858,12 @@ impl<F: ComputationalField, Transcript: TArithmeticTranscript<F>> TProverImpl<Tr
         y_tau_values_ge_r_sumcheck,
         ] =
             e_claim_sumcheck.evs.try_into().unwrap();
-        (eq_ev_sumcheck - eq_eval(&gamma, &e_claim_sumcheck.point[protocol.h..])).require();
+        (eq_ev_sumcheck - eq_eval(&gamma, &e_claim_sumcheck.point[self.h..])).require();
 
-        let reducer = MultiDenseEqSumcheck::new(protocol.h + protocol.d);
+        let reducer = MultiDenseEqSumcheck::new(self.h + self.d);
 
         let mut claims_mess_1 = reducer
-            .prove::<MultiDenseEqSumcheck<_>>(
+            .prove(
                 ctx,
                 MultiPointEvalClaim::new(
                     vec![
@@ -982,10 +982,10 @@ impl<F: ComputationalField, Transcript: TArithmeticTranscript<F>> TProverImpl<Tr
         (claims_mess_1.evs[34] - claims_mess_1.evs[36]).require();
 
 
-        let reducer2 = MultiDenseEqSumcheck::new(protocol.d);
+        let reducer2 = MultiDenseEqSumcheck::new(self.d);
 
         let mut claims_mess_2 = reducer2
-            .prove::<MultiDenseEqSumcheck<_>>(
+            .prove(
                 ctx,
                 MultiPointEvalClaim::new(
                     vec![
@@ -1001,7 +1001,7 @@ impl<F: ComputationalField, Transcript: TArithmeticTranscript<F>> TProverImpl<Tr
                             0,
                             0,
                             e_adj_claim_lookup.ev
-                                - eq_eval(&vec![F::zero(); protocol.d], &e_adj_claim_lookup.point),
+                                - eq_eval(&vec![F::zero(); self.d], &e_adj_claim_lookup.point),
                         ),
                         MultiPointEvalClaimPart::new(1, 3, i_acc.ev),
                     ],
@@ -1013,8 +1013,8 @@ impl<F: ComputationalField, Transcript: TArithmeticTranscript<F>> TProverImpl<Tr
         (claims_mess_2.evs[0] - claims_mess_2.evs[1]).require();
         (claims_mess_2.evs[0] - claims_mess_2.evs[2]).require();
 
-        let reducer_x_accesses_left = MultiDenseEqSumcheck::new(protocol.midx);
-        let (x_accesses_unified_claim_left, _) = reducer_x_accesses_left.prove::<MultiDenseEqSumcheck<_>>(
+        let reducer_x_accesses_left = MultiDenseEqSumcheck::new(self.midx);
+        let (x_accesses_unified_claim_left, _) = reducer_x_accesses_left.prove(
             ctx,
             MultiPointEvalClaim::new(
                 x_tau_left_accesses_claims.iter().map(|c| c.point.clone()).collect_vec(),
@@ -1028,8 +1028,8 @@ impl<F: ComputationalField, Transcript: TArithmeticTranscript<F>> TProverImpl<Tr
         (x_accesses_unified_claim_left.evs[0] - x_accesses_unified_claim_left.evs[1]).require();
         (x_accesses_unified_claim_left.evs[0] - x_accesses_unified_claim_left.evs[2]).require();
 
-        let reducer_x_accesses_right = MultiDenseEqSumcheck::new(protocol.nx + 2 - protocol.midx);
-        let (x_accesses_unified_claim_right, _) = reducer_x_accesses_right.prove::<MultiDenseEqSumcheck<_>>(
+        let reducer_x_accesses_right = MultiDenseEqSumcheck::new(self.nx + 2 - self.midx);
+        let (x_accesses_unified_claim_right, _) = reducer_x_accesses_right.prove(
             ctx,
             MultiPointEvalClaim::new(
                 x_tau_right_accesses_claims.iter().map(|c| c.point.clone()).collect_vec(),
@@ -1054,8 +1054,8 @@ impl<F: ComputationalField, Transcript: TArithmeticTranscript<F>> TProverImpl<Tr
             },
         ];
 
-        let reducer_y_accesses_left = MultiDenseEqSumcheck::new(protocol.midy);
-        let (y_accesses_unified_claim_left, _) = reducer_y_accesses_left.prove::<MultiDenseEqSumcheck<_>>(
+        let reducer_y_accesses_left = MultiDenseEqSumcheck::new(self.midy);
+        let (y_accesses_unified_claim_left, _) = reducer_y_accesses_left.prove(
             ctx,
             MultiPointEvalClaim::new(
                 y_tau_left_accesses_claims.iter().map(|c| c.point.clone()).collect_vec(),
@@ -1069,8 +1069,8 @@ impl<F: ComputationalField, Transcript: TArithmeticTranscript<F>> TProverImpl<Tr
         (y_accesses_unified_claim_left.evs[0] - y_accesses_unified_claim_left.evs[1]).require();
         (y_accesses_unified_claim_left.evs[0] - y_accesses_unified_claim_left.evs[2]).require();
 
-        let reducer_y_accesses_right = MultiDenseEqSumcheck::new(protocol.ny + 2 - protocol.midy);
-        let (y_accesses_unified_claim_right, _) = reducer_y_accesses_right.prove::<MultiDenseEqSumcheck<_>>(
+        let reducer_y_accesses_right = MultiDenseEqSumcheck::new(self.ny + 2 - self.midy);
+        let (y_accesses_unified_claim_right, _) = reducer_y_accesses_right.prove(
             ctx,
             MultiPointEvalClaim::new(
                 y_tau_right_accesses_claims.iter().map(|c| c.point.clone()).collect_vec(),
@@ -1097,7 +1097,7 @@ impl<F: ComputationalField, Transcript: TArithmeticTranscript<F>> TProverImpl<Tr
 
         // All these claims should be returned.
         // This is a mess. there are actually like 12 of them.
-        // Why would we invent a protocol like this?
+        // Why would we invent a self like this?
         ((claims_mess_1, claims_mess_2, x_accesses_claims, y_accesses_claims), ())
     }
 }
@@ -1115,7 +1115,7 @@ pub mod bench_parts {
     use crate::components::vspark::matrix::{r_size, tau, VsparkMatrixGroup};
     use crate::components::vspark::sqrt_vspark::Vspark;
     use crate::components::vspark::vspark::VsparkProverInput;
-    use crate::protocol::component::TProtocol;
+    use crate::protocol::component::{TProtocol, TProverImpl};
     use crate::transcript::transcript::ProofTranscript;
 
     #[derive(Clone, CanonicalSerialize, CanonicalDeserialize)]
@@ -1161,7 +1161,7 @@ pub mod bench_parts {
         let mut transcript_p =
             ProofTranscript::start_prover("asd".as_bytes());
         let (output_claims, _) =
-            vspark.prove::<Vspark<_>>(&mut transcript_p, input.eval_claim.clone(), input.prover_input);
+            vspark.prove(&mut transcript_p, input.eval_claim.clone(), input.prover_input);
         let proof = transcript_p.end();
         let mut transcript_v = ProofTranscript::start_verifier("asd".as_bytes(), proof);
         let expected_output_claims = vspark.verify(&mut transcript_v, input.eval_claim);
@@ -1177,7 +1177,7 @@ mod tests {
     use crate::components::vspark::matrix::{
         r_size, tau::no_decomposition::table, VsparkMatrixGroup,
     };
-    use crate::protocol::component::TProtocol;
+    use crate::protocol::component::{TProtocol, TProverImpl};
     use crate::transcript::transcript::tests::ManualTestTranscript;
     use ark_bn254::Fq as F;
     use ark_std::UniformRand;
@@ -1231,7 +1231,7 @@ mod tests {
             let mut transcript_p =
                 ManualTestTranscript::new((0..1000).map(|_| F::rand(rng)).collect_vec());
             let (output_claims, _) =
-                vspark.prove::<Vspark<_>>(&mut transcript_p, e_claim_before.clone(), prover_input);
+                vspark.prove(&mut transcript_p, e_claim_before.clone(), prover_input);
             let proof = transcript_p.end();
             let mut transcript_v = transcript_p;
             let expected_output_claims = vspark.verify(&mut transcript_v, e_claim_before.clone());
@@ -1271,7 +1271,7 @@ mod tests {
                 let mut transcript_p =
                     ManualTestTranscript::new((0..1000).map(|_| F::rand(rng)).collect_vec());
                 let (output_claims, _) =
-                    vspark.prove::<Vspark<_>>(&mut transcript_p, test_data.eval_claim.clone(), test_data.prover_input);
+                    vspark.prove(&mut transcript_p, test_data.eval_claim.clone(), test_data.prover_input);
                 let proof = transcript_p.end();
                 let mut transcript_v = transcript_p;
                 let expected_output_claims = vspark.verify(&mut transcript_v, test_data.eval_claim);

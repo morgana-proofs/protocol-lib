@@ -144,8 +144,8 @@ impl<F: TFelt, Dialect: TArithmeticTranscript<F>> TProverImpl<Dialect> for Split
     type ProverOutput = ();
 
     #[instrument(name="SplitAt::prove", level="info", skip_all)]
-    fn _prove(protocol: &Self::Verifier, ctx: &mut Dialect, claims: <Self::Verifier as TProtocol<Dialect>>::ClaimsBefore, advice: Self::ProverInput) -> (<Self::Verifier as TProtocol<Dialect>>::ClaimsAfter, Self::ProverOutput) {
-        (protocol.verify(ctx, claims), ())
+    fn prove(&self, ctx: &mut Dialect, claims: <Self::Verifier as TProtocol<Dialect>>::ClaimsBefore, advice: Self::ProverInput) -> (<Self::Verifier as TProtocol<Dialect>>::ClaimsAfter, Self::ProverOutput) {
+        (self.verify(ctx, claims), ())
     }
 
 }

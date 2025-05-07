@@ -155,9 +155,9 @@ impl<F: ComputationalField, Transcript: TArithmeticTranscript<F>> TProverImpl<Tr
     type ProverOutput = ();
 
     #[instrument(name="MultiDenseEqSumcheck::prove", level="info", skip_all)]
-    fn _prove(protocol: &Self::Verifier, ctx: &mut Transcript, claims: <Self as TProtocol<Transcript>>::ClaimsBefore, advice: Self::ProverInput) -> (<Self as TProtocol<Transcript>>::ClaimsAfter, Self::ProverOutput) {
+    fn prove(&self, ctx: &mut Transcript, claims: <Self as TProtocol<Transcript>>::ClaimsBefore, advice: Self::ProverInput) -> (<Self as TProtocol<Transcript>>::ClaimsAfter, Self::ProverOutput) {
         let MultiPointEvalClaim { points, evals } = claims;
-        points.iter().enumerate().for_each(|(idx, point)| {assert_eq!(point.len(), protocol.num_vars, "Wrong point len idx {}", idx)});
+        points.iter().enumerate().for_each(|(idx, point)| {assert_eq!(point.len(), self.num_vars, "Wrong point len idx {}", idx)});
 
         let (evals, polys): (Vec<(usize, Vec<(usize, MultiPointEvalClaimPart<F>)>)>, Vec<(usize, Vec<Vec<F>>)>) = evals.into_iter().enumerate()
             .sorted_by(|(_, a), (_, b)| {a.point_id.cmp(&b.point_id)})
@@ -195,19 +195,19 @@ impl<F: ComputationalField, Transcript: TArithmeticTranscript<F>> TProverImpl<Tr
                 .flatten()
                 .collect_vec(),
             f.clone(),
-            protocol.num_vars,
+            self.num_vars,
             folded_claim
         );
 
-        let generic_protocol_config = SumcheckProtocol::new(
+        let generic_protocol_config = SumcheckGenericProverImpl::new(
             f.clone(),
-            protocol.num_vars,
+            self.num_vars,
         );
 
         let (
             EvalClaim{point: output_point, ev},
             mut poly_evs,
-        ) = generic_protocol_config.prove::<SumcheckGenericProverImpl<_, _, _>>(
+        ) = generic_protocol_config.prove(
             ctx,
             SumClaim(so.claim),
             so,
@@ -284,7 +284,7 @@ use super::*;
 
             let mut transcript_p = ManualTestTranscript::new((0..1000).map(|_| F::rand(rng)).collect_vec());
 
-            let (output_claims, _) = sumcheck.prove::<MultiDenseEqSumcheck<_, >>(&mut transcript_p, claim.clone(), polys.clone());
+            let (output_claims, _) = sumcheck.prove(&mut transcript_p, claim.clone(), polys.clone());
 
             let proof = transcript_p.end();
             let mut transcript_v = transcript_p;
