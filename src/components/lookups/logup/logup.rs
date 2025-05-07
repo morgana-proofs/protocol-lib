@@ -579,7 +579,7 @@ mod tests {
     use ark_std::rand::RngCore;
     use ark_std::UniformRand;
     use num_traits::{One, Zero};
-    use crate::transcript::transcript::tests::ManualTestTranscript;
+    use crate::transcript::transcript::ProofTranscript;
 
     #[test]
     fn test_logup_mainphase() {
@@ -609,11 +609,12 @@ mod tests {
 
             let sum_claim = SumClaim(num / denom);
 
-            let mut ctx = ManualTestTranscript::new((0..1000).map(|_| F::rand(rng)).collect_vec());
+            let mut p_transcript = ProofTranscript::start_prover(b"test");
 
-            let (pclaims, _) = logup.prove(&mut ctx, sum_claim.clone(), data.clone());
-            ctx.end();
-            let vclaims = logup.verify(&mut ctx, sum_claim);
+            let (pclaims, _) = logup.prove(&mut p_transcript, sum_claim.clone(), data.clone());
+            let proof = p_transcript.end();
+            let mut v_transcript = ProofTranscript::start_verifier(b"test", proof);
+            let vclaims = logup.verify(&mut v_transcript, sum_claim);
 
             pclaims.iter().zip(logsizes.iter()).zip(data.iter()).enumerate().for_each(|(idx, (((claim, logsize), input)))| {
                 println!("ev: {:?}, mv: {:?}, idx: {}", claim.evs[0], evaluate_multivar(&input[0], &claim.point), idx);
@@ -675,10 +676,11 @@ mod tests {
 
         let proto = Logup::new(lookups);
 
-        let mut ctx = ManualTestTranscript::new((0..1000).map(|_| F::rand(rng)).collect_vec());
-        let (pclaims, _) = proto.prove(&mut ctx, (), data.clone());
-        ctx.end();
-        let vclaims = proto.verify(&mut ctx, ());
+        let mut p_transcript = ProofTranscript::start_prover(b"test");
+        let (pclaims, _) = proto.prove(&mut p_transcript, (), data.clone());
+        let proof = p_transcript.end();
+        let mut v_transcript = ProofTranscript::start_verifier(b"test", proof);
+        let vclaims = proto.verify(&mut v_transcript, ());
 
 
         for (claim, input) in vclaims.iter().zip(data.iter()) {

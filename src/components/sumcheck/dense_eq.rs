@@ -260,12 +260,12 @@ impl<F: ComputationalField, Fun: AlgFn<F>, Transcript: TArithmeticTranscript<F>>
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::transcript::transcript::tests::ManualTestTranscript;
     use ark_bn254::Fq as F;
     use ark_ff::Field;
     use ark_std::{test_rng, UniformRand};
     use num_traits::{One, Zero};
     use crate::common::math::evaluate_multivar;
+    use crate::transcript::transcript::ProofTranscript;
 
     #[derive(Clone, Copy)]
     pub struct TestFunction {}
@@ -304,7 +304,7 @@ mod tests {
             f.exec(&args).zip(output.iter_mut()).map(|(ret, output)| output.push(ret)).count();
         }
 
-        let mut transcript_p = ManualTestTranscript::new((0..1000).map(|_| F::rand(rng)).collect_vec());
+        let mut transcript_p = ProofTranscript::start_prover(b"test");
 
         let ev_claims : Vec<F> = output.iter().map(|output| evaluate_multivar(output, &point)).collect();
 
@@ -316,7 +316,7 @@ mod tests {
 
         let proof = transcript_p.end();
 
-        let mut transcript_v = transcript_p;
+        let mut transcript_v = ProofTranscript::start_verifier(b"test", proof);
 
         let expected_output_claims = sumcheck.verify(&mut transcript_v, ev_claims);
 

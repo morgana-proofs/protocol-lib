@@ -6,8 +6,8 @@ use ark_ff::{BigInteger, PrimeField};
 use ark_serialize::{CanonicalDeserialize, CanonicalSerialize};
 use serde::{Deserialize, Serialize};
 
-pub trait ComputationalField: TFelt + From<u64> + CanonicalSerialize + CanonicalDeserialize + Send + Sync + PartialEq + Eq + ComputationalFieldSerialisation {}
-impl<T: TFelt + From<u64> + CanonicalSerialize + CanonicalDeserialize + Send + Sync + PartialEq + Eq + ComputationalFieldSerialisation> ComputationalField for T {}
+pub trait ComputationalField: TFelt + From<u64> + CanonicalSerialize + CanonicalDeserialize + Send + Sync + PartialEq + Eq + IOSerialisation + ChallengeSerialisation {}
+impl<T: TFelt + From<u64> + CanonicalSerialize + CanonicalDeserialize + Send + Sync + PartialEq + Eq + IOSerialisation + ChallengeSerialisation> ComputationalField for T {}
 
 pub trait TFeltUtil : Sized {
     type Constants : ComputationalField;
@@ -19,12 +19,14 @@ pub trait TFeltUtil : Sized {
     fn one() -> Self;
 }
 
-pub trait ComputationalFieldSerialisation: Sized + CanonicalSerialize + CanonicalDeserialize {
-    const CHALLENGE_BYTES: usize;
+pub trait IOSerialisation: Sized + CanonicalSerialize + CanonicalDeserialize + Default {
     fn num_bytes() -> usize;
-    fn deserialize_challenge(reader: &[u8]) -> Self;
     fn deserialize(reader: &[u8]) -> Self;
     fn serialize(&self, writer: &mut Vec<u8>);
+}
+pub trait ChallengeSerialisation: Sized{
+    const CHALLENGE_BYTES: usize;
+    fn deserialize_challenge(reader: &[u8]) -> Self;
 }
 
 pub trait TFelt:
@@ -113,16 +115,9 @@ impl<U: PrimeField> Invert for U {
         self.inverse().unwrap()
     }
 }
-impl<U: PrimeField> ComputationalFieldSerialisation for U {
-    const CHALLENGE_BYTES: usize = U::BigInt::NUM_LIMBS * 8;
-
+impl<U: Sized + CanonicalSerialize + CanonicalDeserialize + Default> IOSerialisation for U {
     fn num_bytes() -> usize {
-        U::compressed_size(&U::zero())
-    }
-
-    fn deserialize_challenge(reader: &[u8]) -> Self {
-        assert_eq!(reader.len(), Self::CHALLENGE_BYTES, "wrong challenge bytelen");
-        U::from_le_bytes_mod_order(&reader)
+        U::compressed_size(&U::default())
     }
 
     fn deserialize(reader: &[u8]) -> Self {
@@ -131,6 +126,15 @@ impl<U: PrimeField> ComputationalFieldSerialisation for U {
 
     fn serialize(&self, writer: &mut Vec<u8>) {
         self.serialize_compressed(writer).unwrap();
+    }
+}
+
+impl<U: PrimeField> ChallengeSerialisation for U {
+    const CHALLENGE_BYTES: usize = U::BigInt::NUM_LIMBS * 8;
+
+    fn deserialize_challenge(reader: &[u8]) -> Self {
+        assert_eq!(reader.len(), Self::CHALLENGE_BYTES, "wrong challenge bytelen");
+        U::from_le_bytes_mod_order(&reader)
     }
 }
 

@@ -247,13 +247,14 @@ impl<F: ComputationalField, Transcript: TArithmeticTranscript<F>> TProverImpl<Tr
 mod tests {
     use ark_std::rand::RngCore;
 use super::*;
-    use crate::transcript::transcript::tests::ManualTestTranscript as ManualTestTranscript;
     use ark_bn254::Fq as F;
     use ark_ff::Field;
     use ark_std::{test_rng, UniformRand};
     use ark_std::rand::Rng;
     use num_traits::{One, Zero};
     use crate::common::math::evaluate_multivar;
+    use crate::transcript::transcript::ProofTranscript;
+
     #[test]
     fn verifier_accepts_prover() {
         let rng = &mut test_rng();
@@ -282,12 +283,12 @@ use super::*;
 
             let sumcheck = MultiDenseEqSumcheck::new(logsize);
 
-            let mut transcript_p = ManualTestTranscript::new((0..1000).map(|_| F::rand(rng)).collect_vec());
+            let mut transcript_p = ProofTranscript::start_prover(b"test");
 
             let (output_claims, _) = sumcheck.prove(&mut transcript_p, claim.clone(), polys.clone());
 
             let proof = transcript_p.end();
-            let mut transcript_v = transcript_p;
+            let mut transcript_v = ProofTranscript::start_verifier(b"test", proof);
 
             let expected_output_claims = sumcheck.verify(&mut transcript_v, claim.clone());
 

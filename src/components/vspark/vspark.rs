@@ -408,13 +408,13 @@ mod tests {
     use crate::common::math::evaluate_multivar;
     use crate::components::vspark::matrix::{tau::no_decomposition::table, r_size, VsparkMatrixGroup};
     use crate::protocol::component::{TProtocol, TProverImpl};
-    use crate::transcript::transcript::tests::ManualTestTranscript;
 
     use tracing::level_filters::LevelFilter;
     use tracing_subscriber::{EnvFilter, fmt, prelude::*, reload, Registry, Layer};
     use tracing_subscriber::fmt::format::FmtSpan;
     use tracing_subscriber::layer::{Layered, SubscriberExt};
     use tracing_subscriber::util::{SubscriberInitExt, TryInitError};
+    use crate::transcript::transcript::ProofTranscript;
 
     #[test]
     fn test_vspark() {
@@ -474,13 +474,12 @@ mod tests {
                 _pd: Default::default(),
             };
 
-            let mut transcript_p = ManualTestTranscript::new((0..1000).map(|_| F::rand(rng)).collect_vec());
+            let mut transcript_p = ProofTranscript::start_prover(b"test");
             let (output_claims, _) = vspark.prove(&mut transcript_p, e_claim_before.clone(), prover_input);
             let proof = transcript_p.end();
-            let mut transcript_v = transcript_p;
+            let mut transcript_v = ProofTranscript::start_verifier(b"test", proof);
 
             let expected_output_claims = vspark.verify(&mut transcript_v, e_claim_before.clone());
-            transcript_v.end();
             assert_eq!(output_claims, expected_output_claims);
         }
     }

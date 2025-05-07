@@ -1178,7 +1178,6 @@ mod tests {
         r_size, tau::no_decomposition::table, VsparkMatrixGroup,
     };
     use crate::protocol::component::{TProtocol, TProverImpl};
-    use crate::transcript::transcript::tests::ManualTestTranscript;
     use ark_bn254::Fq as F;
     use ark_std::UniformRand;
     use itertools::Itertools;
@@ -1191,6 +1190,7 @@ mod tests {
     use tracing_subscriber::{fmt, prelude::*, reload, EnvFilter, Layer, Registry};
     use crate::components::vspark::sqrt_vspark::bench_parts::build_sqrt_vspark_data;
     use crate::test_utils::data::load_or_generate_data;
+    use crate::transcript::transcript::ProofTranscript;
 
     #[test]
     fn test_sqrt_vspark() {
@@ -1228,14 +1228,12 @@ mod tests {
             };
             span.exit();
             let span = info_span!("payload").entered();
-            let mut transcript_p =
-                ManualTestTranscript::new((0..1000).map(|_| F::rand(rng)).collect_vec());
+            let mut transcript_p = ProofTranscript::start_prover(b"test");
             let (output_claims, _) =
                 vspark.prove(&mut transcript_p, e_claim_before.clone(), prover_input);
             let proof = transcript_p.end();
-            let mut transcript_v = transcript_p;
+            let mut transcript_v = ProofTranscript::start_verifier(b"test", proof);
             let expected_output_claims = vspark.verify(&mut transcript_v, e_claim_before.clone());
-            transcript_v.end();
             assert_eq!(output_claims, expected_output_claims);
         }
     }
@@ -1268,12 +1266,11 @@ mod tests {
             let span = info_span!("payload").entered();
             {
                 let span = info_span!("sqrt").entered();
-                let mut transcript_p =
-                    ManualTestTranscript::new((0..1000).map(|_| F::rand(rng)).collect_vec());
+                let mut transcript_p = ProofTranscript::start_prover(b"test");
                 let (output_claims, _) =
                     vspark.prove(&mut transcript_p, test_data.eval_claim.clone(), test_data.prover_input);
                 let proof = transcript_p.end();
-                let mut transcript_v = transcript_p;
+                let mut transcript_v = ProofTranscript::start_verifier(b"test", proof);
                 let expected_output_claims = vspark.verify(&mut transcript_v, test_data.eval_claim);
                 transcript_v.end();
                 assert_eq!(output_claims, expected_output_claims);

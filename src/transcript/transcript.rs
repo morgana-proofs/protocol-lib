@@ -3,36 +3,37 @@
 // use super::board::{Sig, TSupportsFormalArithOps, TSupportsFormalType, TSupportsFormalVTranscript};
 
 use std::thread;
+use ark_ec::short_weierstrass::{Affine, SWCurveConfig};
 use ark_ff::{BigInteger, PrimeField};
 use ark_std::iterable::Iterable;
 use merlin::Transcript;
-use crate::common::wrapper::{ComputationalField, ComputationalFieldSerialisation, TFelt, TFeltUtil};
+use crate::common::wrapper::{ComputationalField, IOSerialisation, TFelt, TFeltUtil};
 
 // /// Entry point trait that passes through all interesting operations (so they can be conveniently called without fully qualified syntax).
 // /// Due to "where" semantics, methods are unavailable unless an actual implementor trait is present.
 pub trait TTranscriptInterface {
     /// squeezes new challenge
-    fn challenge<F>(&mut self) -> F where Self: TTranscriptSupports<F> {
+    fn challenge<F>(&mut self) -> F where Self: TTranscriptSupportsChallenges<F> {
         self._challenge()
     }
 
     /// reads from transcript (or allocates this operation); fails for prover dialects - they write and do not read
-    fn read<F>(&mut self) -> F where Self: TTranscriptSupports<F> {
+    fn read<F>(&mut self) -> F where Self: TTranscriptSupportsIO<F> {
         self._read()
     }
 
     /// writes to transcript (or allocates this operation); fails for verifier dialects - they read and do not write
-    fn write<F>(&mut self, value: &F) where Self: TTranscriptSupports<F> {
+    fn write<F>(&mut self, value: &F) where Self: TTranscriptSupportsIO<F> {
         self._write(value)
     }
 
     /// same as read, but does not invoke sponge
-    fn unconstrained_read<F>(&mut self) -> F where Self: TTranscriptSupports<F> {
+    fn unconstrained_read<F>(&mut self) -> F where Self: TTranscriptSupportsIO<F> {
         self._unconstrained_read()
     }
 
     /// same as write, but does not invoke sponge
-    fn unconstrained_write<F>(&mut self, value: &F) where Self: TTranscriptSupports<F> {
+    fn unconstrained_write<F>(&mut self, value: &F) where Self: TTranscriptSupportsIO<F> {
         self._unconstrained_write(value)
     }
 }
@@ -43,9 +44,7 @@ pub trait TTranscriptInterface {
 // /// Methods in this trait are generally fallible - prover is unable to use read methods, verifier is unable to use write
 // /// methods, and some challenges can be unsupported. This is completely OK and much better than having separate traits for
 // /// each of these concepts. 
-pub trait TTranscriptSupports<T> {
-    /// squeezes new challenge
-    fn _challenge(&mut self) -> T;
+pub trait TTranscriptSupportsIO<T> {
     /// reads from transcript (or allocates this operation); fails for prover dialects - they write and do not read
     fn _read(&mut self) -> T;
     /// writes to transcript (or allocates this operation); fails for verifier dialects - they read and do not write
@@ -55,6 +54,11 @@ pub trait TTranscriptSupports<T> {
     /// same as write, but does not invoke sponge
     fn _unconstrained_write(&mut self, value: &T); 
 }
+pub trait TTranscriptSupportsChallenges<T> {
+    /// squeezes new challenge
+    fn _challenge(&mut self) -> T;
+}
+pub trait TTranscriptSupports<T>: TTranscriptSupportsChallenges<T> + TTranscriptSupportsIO<T> {}
 
 // /// A verifier that is capable of field element manipulation
 // pub trait TFormalArithmeticDialect<F: TPrimeField>: TDialectInterface + TSupportsFormalType<F> + TSupportsFormalArithOps<F> + TSupportsFormalVTranscript<F> + TTranscriptSupports<Sig<F, Self>>{}
@@ -108,13 +112,16 @@ impl Drop for ProofTranscript {
 
 impl TTranscriptInterface for ProofTranscript {}
 
-impl<F: ComputationalField> TTranscriptSupports<F> for ProofTranscript {
+impl <F: ComputationalField> TTranscriptSupportsChallenges<F> for ProofTranscript {
     fn _challenge(&mut self) -> F {
         let mut ret = vec![0u8; F::CHALLENGE_BYTES];
         self.merlin_transcript.challenge_bytes(&[], &mut ret);
         F::deserialize_challenge(&ret)
     }
 
+}
+
+impl<F: IOSerialisation> TTranscriptSupportsIO<F> for ProofTranscript {
     fn _read(&mut self) -> F {
         let bytesize = F::num_bytes();
         match self.mode {
@@ -167,64 +174,15 @@ impl<F: ComputationalField> TTranscriptSupports<F> for ProofTranscript {
         }
     }
 }
+impl<F: ComputationalField> TTranscriptSupports<F> for ProofTranscript {}
 
 impl<F: ComputationalField> TArithmeticTranscript<F> for ProofTranscript {}
 
 
 #[cfg(test)]
 pub mod tests {
-    use crate::common::wrapper::ComputationalFieldSerialisation;
+    use crate::common::wrapper::IOSerialisation;
     use super::*;
-
-    pub struct ManualTestTranscript<F: TFelt> {
-        challenges: Vec<F>,
-        c_idx: usize,
-        data: Vec<F>,
-        d_idx: usize,
-    }
-    
-    impl<F: TFelt> ManualTestTranscript<F> {
-        pub fn new(challenges: Vec<F>) -> Self {
-            Self {
-                challenges,
-                c_idx: 0,
-                data: vec![],
-                d_idx: 0,
-            }
-        }
-        pub fn end(&mut self) {
-            self.c_idx = 0;
-        }
-    }
-    
-    impl<F: TFelt> TTranscriptInterface for ManualTestTranscript<F> {}
-    impl<F: TFelt> TTranscriptSupports<F> for ManualTestTranscript<F> {
-        fn _challenge(&mut self) -> F {
-            self.c_idx += 1;
-            self.challenges[self.c_idx - 1].clone()
-        }
-
-        fn _read(&mut self) -> F {
-            self.d_idx += 1;
-            self.data[self.d_idx - 1].clone()
-        }
-
-        fn _write(&mut self, value: &F) {
-            self.data.push(value.clone());
-        }
-
-        fn _unconstrained_read(&mut self) -> F {
-            self.d_idx += 1;
-            self.data[self.d_idx - 1].clone()
-        }
-
-        fn _unconstrained_write(&mut self, value: &F) {
-            self.data.push(value.clone());
-        }
-    }
-
-    impl<F: TFelt> TArithmeticTranscript<F> for ManualTestTranscript<F> {}
-
     #[test]
     fn test_serialization() {
         use ark_bn254::Fq as F;
