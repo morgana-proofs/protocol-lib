@@ -1,6 +1,5 @@
 use std::fs::File;
 
-use ark_ec::pairing::Pairing;
 use ark_ff::{batch_inversion, Field};
 
 
@@ -9,29 +8,19 @@ use rayon::prelude::*;
 
 use super::kzg::{KzgProvingKey, KzgVerifyingKey};
 use ark_std::{Zero, One};
-use crate::common::wrapper::{ComputationalField, TFelt};
+use crate::common::wrapper::{ComputationalField, TPairink, TFelt, TFeltUtil};
+use crate::components::commitments::scheme::CommitmentScheme;
 use crate::transcript::transcript::{TArithmeticTranscript, TTranscriptSupportsIO};
 
 #[derive(Clone)]
-pub struct KnucklesProvingKey<Ctx: Pairing> {
+pub struct KnucklesProvingKey<Ctx: TPairink> {
     pub kzg_pk: KzgProvingKey<Ctx>,
     pub num_vars: usize, // N = 2^num_vars, kzg_pk must have size at least 2N.
     pub k: Ctx::ScalarField, // Taking k = 2 should work in most cases.
     pub inverses: Vec<Ctx::ScalarField> // Precomputed inverses of (k^s - k^N), except for s = N (where it can be anything).
 }
 
-#[derive(Clone)]
-pub struct KnucklesProof<Ctx: Pairing> {
-    pub t_comm: Ctx::G1Affine,
-    pub t_x: Ctx::ScalarField,
-    pub p_x: Ctx::ScalarField,
-    pub p_lt_x_proof: Ctx::G1Affine,
-    pub t_kx: Ctx::ScalarField,
-    pub t_kx_proof: Ctx::G1Affine,
-
-}
-
-impl<Ctx: Pairing> KnucklesProvingKey<Ctx> {
+impl<Ctx: TPairink> KnucklesProvingKey<Ctx> {
     pub fn new(kzg_pk: KzgProvingKey<Ctx>, num_vars: usize, k: Ctx::ScalarField) -> Self {
         let n = 1 << num_vars;
         assert!(kzg_pk.ptau_1().len() >= 2 * n - 1, "SRS is too short.");
@@ -67,12 +56,12 @@ impl<Ctx: Pairing> KnucklesProvingKey<Ctx> {
         KnucklesVerifyingKey { kzg_vk, num_vars: self.num_vars, k: self.k }
     }
 
-    pub fn commit(&self, poly: &[Ctx::ScalarField]) -> Ctx::G1Affine {
+    pub fn commit(&self, poly: &[Ctx::ScalarField]) -> Ctx::G1 {
         assert!(poly.len() <= 1 << self.num_vars);
         self.kzg_pk.commit(poly)
     }
 
-    pub fn kzg_basis(&self) -> &[Ctx::G1Affine] {
+    pub fn kzg_basis(&self) -> &[Ctx::G1] {
         self.kzg_pk.ptau_1()
     }
 
@@ -129,14 +118,14 @@ impl<Ctx: Pairing> KnucklesProvingKey<Ctx> {
     /// This is somewhat similar to our protocol API, with commitment having a role of a "claim",
     /// though we do not implement it for now.
     pub fn prove<
-        Transcript: TArithmeticTranscript<Ctx::ScalarField> + TTranscriptSupportsIO<Ctx::G1Affine>,
+        Transcript: TArithmeticTranscript<Ctx::ScalarField> + TTranscriptSupportsIO<Ctx::G1>,
     >(
         &self,
         poly: &[Ctx::ScalarField],
         point: &[Ctx::ScalarField],
         claimed_opening: Ctx::ScalarField,
         transcript: &mut Transcript,
-    ) -> KnucklesProof<Ctx> {
+    ) {
         let a = self.compute_t(poly, point);
         let (t, opening) = a;
         assert!(opening == claimed_opening, "Incorrect opening claim.");
@@ -178,20 +167,17 @@ impl<Ctx: Pairing> KnucklesProvingKey<Ctx> {
         // - but if we want verifier's randomness for final check to be deterministic, it should be done).
 
         let _: Ctx::ScalarField = transcript.challenge();
-
-        KnucklesProof{ t_comm, t_x, p_x, p_lt_x_proof, t_kx, t_kx_proof }
-
     }
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
-pub struct KnucklesVerifyingKey<Ctx: Pairing> {
+pub struct KnucklesVerifyingKey<Ctx: TPairink> {
     pub kzg_vk: KzgVerifyingKey<Ctx>,
     pub num_vars: usize,
     pub k: Ctx::ScalarField,
 }
 
-impl<Ctx: Pairing> KnucklesVerifyingKey<Ctx> {
+impl<Ctx: TPairink> KnucklesVerifyingKey<Ctx> {
 
     /// Reduces a proof to deferred pair (a, b), allegedly satisfying <a, h0> == <b, h1>.
     /// poly_comm, point and opening MUST already be in transcript (they are not added
@@ -199,15 +185,15 @@ impl<Ctx: Pairing> KnucklesVerifyingKey<Ctx> {
     /// This is in line with our general convention of ClaimsToReduce being added to transcript outside
     /// of the function.
     pub fn verify_reduce_to_pair<
-        Transcript: TArithmeticTranscript<Ctx::ScalarField> + TTranscriptSupportsIO<Ctx::G1Affine>
+        Transcript: TArithmeticTranscript<Ctx::ScalarField> + TTranscriptSupportsIO<Ctx::G1>
     > (
         &self,
-        poly_comm: Ctx::G1Affine,
+        poly_comm: Ctx::G1,
         point: &[Ctx::ScalarField],
         claimed_opening: Ctx::ScalarField,
         transcript: &mut Transcript,
-    ) -> (Ctx::G1Affine, Ctx::G1Affine) {
-        let t_comm: Ctx::G1Affine = transcript.read();
+    ) -> (Ctx::G1, Ctx::G1) {
+        let t_comm: Ctx::G1 = transcript.read();
         let x: Ctx::ScalarField = transcript.challenge();
 
         let kx = x * self.k;
@@ -218,12 +204,12 @@ impl<Ctx: Pairing> KnucklesVerifyingKey<Ctx> {
         let p_lt_comm = t_comm * lambda + poly_comm;
         let p_lt_open = t_x * lambda + p_x;
 
-        let p_lt_x_proof: Ctx::G1Affine = transcript.read();
+        let p_lt_x_proof: Ctx::G1 = transcript.read();
 
         let (a0, b0) = self.kzg_vk.verify_reduce_to_pair(p_lt_comm, p_lt_x_proof, x, p_lt_open);
 
         let t_kx: Ctx::ScalarField = transcript.read();
-        let t_kx_proof: Ctx::G1Affine = transcript.read();
+        let t_kx_proof: Ctx::G1 = transcript.read();
 
         let (a1, b1) = self.kzg_vk.verify_reduce_to_pair(t_comm, t_kx_proof, kx, t_kx);
 
@@ -245,7 +231,7 @@ impl<Ctx: Pairing> KnucklesVerifyingKey<Ctx> {
         let rhs = x * p_x * eq_ev; // x * P(x) Eq_point (x)
 
 
-        assert!(lhs == rhs);
+        (lhs - rhs).require();
 
         let fin: Ctx::ScalarField = transcript.challenge();
 
@@ -254,10 +240,10 @@ impl<Ctx: Pairing> KnucklesVerifyingKey<Ctx> {
     }
 
     pub fn verify_directly<
-        Transcript: TArithmeticTranscript<Ctx::ScalarField> + TTranscriptSupportsIO<Ctx::G1Affine>
+        Transcript: TArithmeticTranscript<Ctx::ScalarField> + TTranscriptSupportsIO<Ctx::G1>
     > (
         &self,
-        poly_comm: Ctx::G1Affine,
+        poly_comm: Ctx::G1,
         point: &[Ctx::ScalarField],
         claimed_opening: Ctx::ScalarField,
         transcript: &mut Transcript,
@@ -267,7 +253,14 @@ impl<Ctx: Pairing> KnucklesVerifyingKey<Ctx> {
     }
 }
 
+impl<P: TPairink> CommitmentScheme for KnucklesProvingKey<P> {
+    type Commitment = P::G1;
+    type ScalarField = P::ScalarField;
 
+    fn commit<Transcript: TArithmeticTranscript<Self::ScalarField>>(&mut self, transcript: &mut Transcript, poly: &[Self::ScalarField]) -> Self::Commitment {
+        todo!()
+    }
+}
 
 
 
@@ -285,7 +278,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn knuckles_prove_and_verify () {
+    fn knuckles_prove_and_verify() {
         let rng = &mut test_rng();
         let k = Fr::from(2);
         let num_vars = 10;
@@ -313,9 +306,9 @@ mod tests {
         let knuckles_vk = knuckles_pk.verifying_key();
 
         let mut v_transcript = ProofTranscript::start_verifier(b"test knuckles", proof) ;
-        let v_poly_comm: <Ctx as Pairing>::G1Affine = v_transcript.read();
+        let v_poly_comm: <Ctx as TPairink>::G1 = v_transcript.read();
         assert_eq!(v_poly_comm, poly_comm);
-        let v_opening: <Ctx as Pairing>::ScalarField = v_transcript.read();
+        let v_opening: <Ctx as TPairink>::ScalarField = v_transcript.read();
         assert_eq!(v_opening, opening);
 
         knuckles_vk.verify_directly(poly_comm, &point, opening, &mut v_transcript);

@@ -6,40 +6,40 @@
 use std::fs::File;
 
 use ark_ec::{CurveGroup, VariableBaseMSM};
-use ark_ec::pairing::Pairing;
 use ark_ff::PrimeField;
 use ark_std::{One, UniformRand};
-use ark_std::rand::Rng;
+use ark_std::rand::{Rng, RngCore};
 use rayon::iter::IntoParallelIterator;
 use rayon::iter::ParallelIterator;
+use crate::common::wrapper::{TPairink, TFeltUtil, Pairing, PairingStructure};
 
 #[derive(Clone)]
 pub struct KzgProvingKey<Ctx: Pairing> {
-    ptau_1: Vec<Ctx::G1Affine>,
-    h0: Ctx::G2Affine,
-    h1: Ctx::G2Affine,
+    ptau_1: Vec<Ctx::G1>,
+    h0: Ctx::G2,
+    h1: Ctx::G2,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
-pub struct KzgVerifyingKey<Ctx: Pairing> {
-    tau0: Ctx::G1Affine,
-    h0: Ctx::G2Affine,
-    h1: Ctx::G2Affine,
+pub struct KzgVerifyingKey<Ctx: TPairink> {
+    tau0: Ctx::G1,
+    h0: Ctx::G2,
+    h1: Ctx::G2,
 }
 
-impl<Ctx: Pairing> KzgVerifyingKey<Ctx> {
+impl<Ctx: TPairink> KzgVerifyingKey<Ctx> {
 
     /// Directly verifies KZG opening proof.
     pub fn verify_directly(
         &self,
-        poly_commitment: Ctx::G1Affine,
-        quotient_commitment: Ctx::G1Affine,
+        poly_commitment: Ctx::G1,
+        quotient_commitment: Ctx::G1,
         opening_at: Ctx::ScalarField,
         opening: Ctx::ScalarField,
     ) {
-        assert_eq!(
-            Ctx::pairing(Into::<Ctx::G1>::into(poly_commitment) - self.tau0 * opening, self.h0),
-            Ctx::pairing(quotient_commitment, Into::<Ctx::G2>::into(self.h1) - self.h0 * opening_at)
+        Ctx::require_pairing_eq(
+            poly_commitment + self.tau0 * (-opening), self.h0,
+            quotient_commitment, self.h1 + self.h0 * (-opening_at),
         )
     }
 
@@ -51,18 +51,18 @@ impl<Ctx: Pairing> KzgVerifyingKey<Ctx> {
         quotient_commitment: impl Into<Ctx::G1>,
         opening_at: Ctx::ScalarField,
         opening: Ctx::ScalarField,
-    ) -> (Ctx::G1Affine, Ctx::G1Affine) {
+    ) -> (Ctx::G1, Ctx::G1) {
         // e<[P] - b * G0, H0> == e<[Q], H1 - a H0>
         // e<[P] + a * [Q] - b * G0, H0> = e<[Q], H1>
         let quotient_commitment = quotient_commitment.into();
-        ((quotient_commitment * opening_at - self.tau0 * opening + poly_commitment.into()).into(), quotient_commitment.into())
+        ((quotient_commitment * opening_at + self.tau0 * (-opening) + poly_commitment.into()).into(), quotient_commitment.into())
     }
 
     /// Verifies <pair.0, h0> == <pair.1, h1>
-    pub fn verify_pair(&self, pair: (Ctx::G1Affine, Ctx::G1Affine)) {
-        assert_eq!(
-            Ctx::pairing(pair.0, self.h0),
-            Ctx::pairing(pair.1, self.h1)
+    pub fn verify_pair(&self, pair: (Ctx::G1, Ctx::G1)) {
+        Ctx::require_pairing_eq(
+            pair.0, self.h0,
+            pair.1, self.h1,
         );
     }
 
@@ -80,19 +80,19 @@ pub fn div_by_linear<F: PrimeField>(poly: &[F], pt: F) -> (Vec<F>, F) {
 }
 
 impl<Ctx: Pairing> KzgProvingKey<Ctx> {
-    pub fn mock_setup(tau: Ctx::ScalarField, g0: Ctx::G1Affine, h0: Ctx::G2Affine, size: usize) -> Self {
+    pub fn mock_setup(tau: <Ctx as PairingStructure>::ScalarField, g0: <Ctx as PairingStructure>::G1, h0: <Ctx as PairingStructure>::G2, size: usize) -> Self {
         let mut powers_of_tau = Vec::with_capacity(size);
-        let mut p = Ctx::ScalarField::one();
+        let mut p = <Ctx as PairingStructure>::ScalarField::one();
         for _ in 0..size {
             powers_of_tau.push(p);
             p *= tau;
         }
 
-        let h1 : Ctx::G2Affine = (h0 * tau).into();
+        let h1 : <Ctx as PairingStructure>::G2 = (h0 * tau).into();
 
-        let ptau1_proj : Vec<Ctx::G1> = powers_of_tau.into_par_iter().map(|sc| g0 * sc).collect();
+        let ptau1_proj : Vec<<Ctx as PairingStructure>::G1> = powers_of_tau.into_par_iter().map(|sc| g0 * sc).collect();
 
-        Self{ptau_1: Ctx::G1::normalize_batch(&ptau1_proj), h0, h1}
+        Self{ptau_1: <Ctx as PairingStructure>::G1::normalize_batch(&ptau1_proj), h0, h1}
     }
 
     pub fn load(file: &mut File) -> Self {
@@ -103,15 +103,15 @@ impl<Ctx: Pairing> KzgProvingKey<Ctx> {
         todo!()
     }
 
-    pub fn ptau_1(&self) -> &[Ctx::G1Affine] {
+    pub fn ptau_1(&self) -> &[<Ctx as PairingStructure>::G1] {
         &self.ptau_1
     }
 
-    pub fn h0(&self) -> &Ctx::G2Affine {
+    pub fn h0(&self) -> &<Ctx as PairingStructure>::G2 {
         &self.h0
     }
 
-    pub fn h1(&self) -> &Ctx::G2Affine {
+    pub fn h1(&self) -> &<Ctx as PairingStructure>::G2 {
         &self.h1
     }
 
@@ -119,22 +119,22 @@ impl<Ctx: Pairing> KzgProvingKey<Ctx> {
         KzgVerifyingKey { tau0: self.ptau_1[0], h0: self.h0, h1: self.h1 }
     }
 
-    pub fn commit(&self, poly: &[Ctx::ScalarField]) -> Ctx::G1Affine {
+    pub fn commit(&self, poly: &[<Ctx as PairingStructure>::ScalarField]) -> <Ctx as PairingStructure>::G1 {
         assert!(poly.len() <= self.ptau_1.len(), "Vector is too large.");
-        <Ctx::G1 as VariableBaseMSM>::msm(&self.ptau_1[..poly.len()], poly).unwrap().into()
+        Ctx::msm(&self.ptau_1[..poly.len()], poly)
     }
 
     /// Given a polynomial, returns a commitment to its quotient by x-pt, and the univariate opening.
-    pub fn open(&self, poly: &[Ctx::ScalarField], pt: Ctx::ScalarField) -> (Ctx::G1Affine, Ctx::ScalarField) {
+    pub fn open(&self, poly: &[<Ctx as PairingStructure>::ScalarField], pt: <Ctx as PairingStructure>::ScalarField) -> (<Ctx as PairingStructure>::G1, <Ctx as PairingStructure>::ScalarField) {
         let (a, b) = div_by_linear(poly, pt);
         (self.commit(&a), b)
     }
 }
 
 pub fn random_kzg_pk<Ctx: Pairing>(size: usize, rng: &mut impl Rng) -> KzgProvingKey<Ctx> {
-    let tau = <Ctx as Pairing>::ScalarField::rand(rng);
-    let g0 = <Ctx as Pairing>::G1Affine::rand(rng);
-    let h0 = <Ctx as Pairing>::G2Affine::rand(rng);
+    let tau = <Ctx as PairingStructure>::ScalarField::from(rng.next_u64());
+    let g0 = <Ctx as PairingStructure>::G1::from(rng.next_u64());
+    let h0 = <Ctx as PairingStructure>::G2::from(rng.next_u64());
     KzgProvingKey::mock_setup(tau, g0, h0, size)
 }
 
