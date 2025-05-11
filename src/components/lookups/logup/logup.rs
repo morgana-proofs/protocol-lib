@@ -6,7 +6,7 @@ use tracing::instrument;
 use crate::common::algfn::AlgFn;
 use crate::common::claims::{EvalClaim, SinglePointClaims, SumClaim};
 use crate::common::math::{evaluate_index_poly, evaluate_multivar};
-use crate::common::wrapper::{ComputationalField, TFelt};
+use crate::common::wrapper::{ComputationalField, TFelt, TSigUtil};
 use crate::components::splits::split::{SplitAt, SplitIdx};
 use crate::components::sumcheck::dense_eq::DenseEqSumcheck;
 use crate::transcript::transcript::TArithmeticTranscript;
@@ -215,7 +215,7 @@ impl<F: TFelt, Dialect: TArithmeticTranscript<F>> TProtocol<Dialect> for LogupMa
     }
 }
 
-impl<F: ComputationalField, Transcript: TArithmeticTranscript<F>> TProverImpl<Transcript> for LogupMainphase<F> {
+impl<F: ComputationalField, Transcript: TArithmeticTranscript<F>> TProverImpl<Transcript> for LogupMainphase<F> where <F as TSigUtil>::Constants: From<u64>  {
     type Verifier = Self;
     type ProverInput = Vec<[Vec<F>; 2]>;
     type ProverOutput = ();
@@ -317,7 +317,7 @@ pub enum LookupInput<F: TFelt> {
 }
 
 impl <F: TFelt> LookupInput<F> {
-    pub fn indexed_by_usize(table: Vec<F>, accesses: Vec<F>, values: Vec<F>, indexes: Vec<usize>) -> Self {
+    pub fn indexed_by_usize(table: Vec<F>, accesses: Vec<F>, values: Vec<F>, indexes: Vec<usize>) -> Self where <F as TSigUtil>::Constants: From<u64> {
         LookupInput::Indexed(IndexedLookupInput{
             values,
             accesses,
@@ -456,7 +456,7 @@ impl<F: TFelt, Dialect: TArithmeticTranscript<F>> TProtocol<Dialect> for Logup<F
     }
 }
 
-impl<F: ComputationalField, Transcript: TArithmeticTranscript<F>> TProverImpl<Transcript> for Logup<F> {
+impl<F: ComputationalField, Transcript: TArithmeticTranscript<F>> TProverImpl<Transcript> for Logup<F> where <F as TSigUtil>::Constants: From<u64> {
     type Verifier = Self;
     type ProverInput = Vec<LookupInput<F>>;
     type ProverOutput = ();
@@ -605,7 +605,7 @@ mod tests {
 
             let (_, [num, denom]) = logup.make_witness(data.clone());
 
-            assert!(denom != F::zero());
+            assert!(denom != <F as TSigUtil>::zero());
 
             let sum_claim = SumClaim(num / denom);
 
@@ -648,7 +648,7 @@ mod tests {
             };
             let table = (0..(1 << table_logsize)).map(|i| F::rand(rng)).collect_vec();
             let indexes = (0..(1 << values_logsize)).map(|i| rng.next_u64() as usize % (1 << table_logsize) as usize).collect_vec();
-            let mut accesses = table.iter().map(|_|  F::zero()).collect_vec();
+            let mut accesses = table.iter().map(|_|  <F as TSigUtil>::zero()).collect_vec();
             let values = indexes.iter().map(|i| {
                 accesses[*i] += F::one();
                 table[*i]

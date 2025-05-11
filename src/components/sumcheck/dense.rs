@@ -3,7 +3,7 @@ use itertools::Itertools;
 use tracing::instrument;
 use crate::common::algfn::AlgFnSO;
 use crate::common::claims::{EvalClaim, SinglePointClaims, SumClaim};
-use crate::common::wrapper::{ComputationalField, TFelt};
+use crate::common::wrapper::{ComputationalField, TFelt, TSigUtil};
 use crate::components::sumcheck::dense_eq::DenseSumcheckableSO;
 use crate::components::sumcheck::generic::{SumcheckGenericProverImpl, SumcheckProtocol};
 use crate::transcript::transcript::TArithmeticTranscript;
@@ -37,7 +37,7 @@ impl<F: TFelt, Fun: AlgFnSO<F>, Transcript: TArithmeticTranscript<F>> TProtocol<
     }
 }
 
-impl<F: ComputationalField, Fun: AlgFnSO<F>, Transcript: TArithmeticTranscript<F>> TProverImpl<Transcript> for DenseSumcheck<F, Fun> {
+impl<F: ComputationalField, Fun: AlgFnSO<F>, Transcript: TArithmeticTranscript<F>> TProverImpl<Transcript> for DenseSumcheck<F, Fun> where <F as TSigUtil>::Constants: From<u64>  {
     type Verifier = Self;
     type ProverInput = Vec<Vec<F>>;
     type ProverOutput = ();

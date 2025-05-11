@@ -6,7 +6,7 @@ use tracing::instrument;
 use crate::common::algfn::AlgFnSO;
 use crate::common::claims::{EvalClaim, SinglePointClaims, SumClaim};
 use crate::common::math::{eq_poly, evaluate_multivar};
-use crate::common::wrapper::{ComputationalField, TFelt};
+use crate::common::wrapper::{ComputationalField, TFelt, TSigUtil};
 use crate::components::sumcheck::dense_eq::{eq_eval, DenseSumcheckableSO};
 use crate::components::sumcheck::generic::{SumcheckGenericProverImpl, SumcheckProtocol};
 use crate::transcript::transcript::TArithmeticTranscript;
@@ -149,7 +149,7 @@ impl <F: TFelt, Transcript: TArithmeticTranscript<F>> TProtocol<Transcript> for 
     }
 }
 
-impl<F: ComputationalField, Transcript: TArithmeticTranscript<F>> TProverImpl<Transcript> for MultiDenseEqSumcheck<F> {
+impl<F: ComputationalField, Transcript: TArithmeticTranscript<F>> TProverImpl<Transcript> for MultiDenseEqSumcheck<F> where <F as TSigUtil>::Constants: From<u64>  {
     type Verifier = Self;
     type ProverInput = Vec<Vec<F>>;
     type ProverOutput = ();

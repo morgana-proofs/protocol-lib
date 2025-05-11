@@ -5,6 +5,13 @@ use crate::common::wrapper::{ComputationalField, TFelt};
 #[derive(Clone, Eq, PartialEq, Debug)]
 pub struct SumClaim<F>(pub F);
 
+
+#[derive(Clone, Eq, PartialEq, Debug)]
+pub struct UnivarEvalClaim<F> {
+    pub ev: F,
+    pub point: F,
+}
+
 #[derive(Clone, Eq, PartialEq, Debug)]
 pub struct EvalClaim<F> {
     pub ev: F,

@@ -1,7 +1,7 @@
 use crate::common::algfn::{AlgFn, AlgFnSO, AlgFnSoUtils};
 use crate::common::claims::{EvalClaim, SinglePointClaims, SumClaim};
 use crate::common::math::{eq_poly, evaluate_multivar, top_bind_multivar_point};
-use crate::common::wrapper::{ComputationalField, TFelt};
+use crate::common::wrapper::{ComputationalField, TFelt, TSigUtil};
 use crate::components::lookups::logup::logup::{
     IndexedLookupClaim, IndexedLookupInput, Logup, LookupClaim, LookupInput, LookupType,
 };
@@ -481,7 +481,7 @@ impl<F: TFelt, Transcript: TArithmeticTranscript<F>> TProtocol<Transcript> for V
 }
 
 impl<F: ComputationalField, Transcript: TArithmeticTranscript<F>> TProverImpl<Transcript>
-    for Vspark<F>
+    for Vspark<F> where <F as TSigUtil>::Constants: From<u64>
 {
     type Verifier = Self;
     type ProverInput = VsparkProverInput<F>;
@@ -1111,7 +1111,7 @@ pub mod bench_parts {
     use tracing::info_span;
     use crate::common::claims::EvalClaim;
     use crate::common::math::evaluate_multivar;
-    use crate::common::wrapper::{ComputationalField, TFelt};
+    use crate::common::wrapper::{ComputationalField, TFelt, TSigUtil};
     use crate::components::vspark::matrix::{r_size, tau, VsparkMatrixGroup};
     use crate::components::vspark::sqrt_vspark::Vspark;
     use crate::components::vspark::vspark::VsparkProverInput;
@@ -1156,7 +1156,7 @@ pub mod bench_parts {
             eval_claim: e_claim_before,
         }
     }
-    pub fn run_sqrt_vspark<F: ComputationalField>(vspark: &Vspark<F>, input: VsparkTestcaseData<F>) {
+    pub fn run_sqrt_vspark<F: ComputationalField>(vspark: &Vspark<F>, input: VsparkTestcaseData<F>) where <F as TSigUtil>::Constants: From<u64>  {
         let span = info_span!("sqrt").entered();
         let mut transcript_p =
             ProofTranscript::start_prover("asd".as_bytes());

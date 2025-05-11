@@ -10,7 +10,7 @@ use itertools::{repeat_n, Itertools};
 use crate::common::algfn::{AlgFn, AlgFnSO, AlgFnSoUtils};
 use crate::common::claims::{EvalClaim, SinglePointClaims, SumClaim};
 use crate::common::math::{eq_poly, evaluate_multivar, top_bind_multivar_point};
-use crate::common::wrapper::{ComputationalField, TFelt};
+use crate::common::wrapper::{ComputationalField, TFelt, TSigUtil};
 use crate::components::lookups::logup::logup::{IndexedLookupClaim, IndexedLookupInput, Logup, LookupClaim, LookupInput, LookupType};
 use crate::components::sumcheck::dense::DenseSumcheck;
 use crate::components::sumcheck::dense_eq::eq_eval;
@@ -199,7 +199,7 @@ impl<F: TFelt, Transcript: TArithmeticTranscript<F>> TProtocol<Transcript> for V
 }
 
 
-impl<F: ComputationalField, Transcript: TArithmeticTranscript<F>> TProverImpl<Transcript> for Vspark<F> {
+impl<F: ComputationalField, Transcript: TArithmeticTranscript<F>> TProverImpl<Transcript> for Vspark<F> where <F as TSigUtil>::Constants: From<u64>  {
     type Verifier = Self;
     type ProverInput = VsparkProverInput<F>;
     type ProverOutput = ();

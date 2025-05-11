@@ -181,7 +181,7 @@ impl<F: ComputationalField> TArithmeticTranscript<F> for ProofTranscript {}
 
 #[cfg(test)]
 pub mod tests {
-    use crate::common::wrapper::IOSerialisation;
+    use crate::common::wrapper::{IOSerialisation, TSigUtil};
     use super::*;
     #[test]
     fn test_serialization() {
@@ -191,5 +191,12 @@ pub mod tests {
         F::zero().serialize(&mut writer);
         assert_eq!(F::deserialize(&writer), F::zero());
 
+        use ark_bn254::Bn254 as Ctx;
+        use ark_ec::pairing::Pairing;;
+        let mult = <Ctx as Pairing>::G1::num_bytes();
+
+        let mut writer = Vec::with_capacity(mult);
+        <Ctx as Pairing>::G1::zero().serialize(&mut writer);
+        assert_eq!(<Ctx as Pairing>::G1::deserialize(&writer), <Ctx as Pairing>::G1::zero());
     }
 }
