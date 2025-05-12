@@ -2,8 +2,7 @@ use std::fs::File;
 
 use ark_ec::pairing::Pairing;
 use ark_ff::{batch_inversion, Field};
-
-
+use ark_serialize::{CanonicalDeserialize, CanonicalSerialize};
 use crate::components::commitments::kzg::ev;
 use rayon::prelude::*;
 
@@ -11,7 +10,7 @@ use super::kzg::{KzgProvingKey, KzgVerifyingKey};
 use ark_std::{Zero, One};
 use crate::common::claims::{EvalClaim, UnivarEvalClaim};
 use crate::common::wrapper::{ComputationalField, TFelt};
-use crate::components::commitments::scheme::{CommitmentMode, CommitmentSchemeMode, OpeningMode, TPairVerifier};
+use crate::components::commitments::scheme::{CommitmentMode, CommitmentSchemeMode, OpeningMode, TCommitmentEngineProver, TCommitmentEngineVerifier, TPairVerifier};
 use crate::protocol::component::{TProtocol, TProverImpl};
 use crate::transcript::transcript::{TArithmeticTranscript, TTranscriptSupportsIO};
 
@@ -23,8 +22,8 @@ pub struct KnucklesProvingKey<Ctx: Pairing, Mode: CommitmentSchemeMode> {
     pub inverses: Vec<Ctx::ScalarField> // Precomputed inverses of (k^s - k^N), except for s = N (where it can be anything).
 }
 
-impl<Ctx: Pairing, Mode: CommitmentSchemeMode> KnucklesProvingKey<Ctx, Mode> {
-    pub fn commitment(self) -> KnucklesProvingKey<Ctx, CommitmentMode> {
+impl<Ctx: Pairing, Mode: CommitmentSchemeMode> TCommitmentEngineProver for KnucklesProvingKey<Ctx, Mode> {
+    fn commitment(self) -> KnucklesProvingKey<Ctx, CommitmentMode> {
         KnucklesProvingKey {
             kzg_pk: self.kzg_pk.commitment(),
             num_vars: self.num_vars,
@@ -32,7 +31,7 @@ impl<Ctx: Pairing, Mode: CommitmentSchemeMode> KnucklesProvingKey<Ctx, Mode> {
             inverses: self.inverses,
         }
     }
-    pub fn opening(self) -> KnucklesProvingKey<Ctx, OpeningMode> {
+    fn opening(self) -> KnucklesProvingKey<Ctx, OpeningMode> {
         KnucklesProvingKey {
             kzg_pk: self.kzg_pk.opening(),
             num_vars: self.num_vars,
@@ -40,7 +39,23 @@ impl<Ctx: Pairing, Mode: CommitmentSchemeMode> KnucklesProvingKey<Ctx, Mode> {
             inverses: self.inverses,
         }
     }
+
+    type Verifier = KnucklesVerifyingKey<Ctx, Mode>;
+
+    fn verifier(&self) -> Self::Verifier {
+        self.verifying_key()
+    }
 }
+
+#[derive(Clone, CanonicalSerialize, CanonicalDeserialize)]
+pub struct KnucklesSetup<P: Pairing> {
+    pub tau: P::ScalarField,
+    pub g0: P::G1Affine,
+    pub h0: P::G2Affine,
+    pub num_vars: usize,
+    pub k: P::ScalarField,
+}
+
 
 impl<Ctx: Pairing> KnucklesProvingKey<Ctx, CommitmentMode> {
     pub fn new(kzg_pk: KzgProvingKey<Ctx, CommitmentMode>, num_vars: usize, k: Ctx::ScalarField) -> Self {
@@ -62,6 +77,11 @@ impl<Ctx: Pairing> KnucklesProvingKey<Ctx, CommitmentMode> {
     }
     pub fn load(file: &mut File) -> Self {
         todo!()
+    }
+    pub fn build(setup: KnucklesSetup<Ctx>) -> Self {
+        let n = 1 << setup.num_vars;
+        let kzg_pk = KzgProvingKey::mock_setup(setup.tau, setup.g0, setup.h0, 2 * n - 1);
+        Self::new(kzg_pk, setup.num_vars, setup.k)
     }
 }
 
@@ -197,15 +217,15 @@ pub struct KnucklesVerifyingKey<Ctx: Pairing, Mode: CommitmentSchemeMode> {
     pub k: Ctx::ScalarField,
 }
 
-impl<Ctx: Pairing, Mode: CommitmentSchemeMode> KnucklesVerifyingKey<Ctx, Mode> {
-    pub fn commitment(self) -> KnucklesVerifyingKey<Ctx, CommitmentMode> {
+impl<Ctx: Pairing, Mode: CommitmentSchemeMode> TCommitmentEngineVerifier for KnucklesVerifyingKey<Ctx, Mode> {
+    fn commitment(self) -> KnucklesVerifyingKey<Ctx, CommitmentMode> {
         KnucklesVerifyingKey {
             kzg_vk: self.kzg_vk.commitment(),
             num_vars: self.num_vars,
             k: self.k,
         }
     }
-    pub fn opening(self) -> KnucklesVerifyingKey<Ctx, OpeningMode> {
+    fn opening(self) -> KnucklesVerifyingKey<Ctx, OpeningMode> {
         KnucklesVerifyingKey {
             kzg_vk: self.kzg_vk.opening(),
             num_vars: self.num_vars,

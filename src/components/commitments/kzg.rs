@@ -9,6 +9,7 @@ use ark_bn254::G1Affine;
 use ark_ec::{CurveGroup, VariableBaseMSM};
 use ark_ec::pairing::Pairing;
 use ark_ff::PrimeField;
+use ark_serialize::{CanonicalDeserialize, CanonicalSerialize};
 use ark_std::{One, UniformRand};
 use ark_std::rand::Rng;
 use rayon::iter::IntoParallelIterator;
@@ -124,6 +125,14 @@ pub fn div_by_linear<F: PrimeField>(poly: &[F], pt: F) -> (Vec<F>, F) {
         rem = poly[i] + rem*pt;
     }
     (quotient, rem)
+}
+
+#[derive(Clone, CanonicalSerialize, CanonicalDeserialize)]
+pub struct KZGSetup<P: Pairing> {
+    pub tau: P::ScalarField,
+    pub g0: P::G1Affine,
+    pub h0: P::G2Affine,
+    pub size: usize,
 }
 
 impl<Ctx: Pairing> KzgProvingKey<Ctx, CommitmentMode> {
