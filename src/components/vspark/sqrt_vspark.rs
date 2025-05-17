@@ -1,4 +1,4 @@
-use crate::common::algfn::{AlgFn, AlgFnSO, AlgFnSoUtils};
+use crate::common::algfn::{AlgFn, AlgFnSO, AlgFnSoUtils, RLC};
 use crate::common::claims::{EvalClaim, SinglePointClaims, SumClaim};
 use crate::common::math::{eq_poly, evaluate_multivar, top_bind_multivar_point};
 use crate::common::wrapper::{ComputationalField, TFelt, TSigUtil};
@@ -16,7 +16,7 @@ use crate::components::vspark::matrix::{
     r_size, tau, tau::no_decomposition::at_point, tau::no_decomposition::table,
 };
 use crate::protocol::component::{TProtocol, TProverImpl};
-use crate::transcript::transcript::{TArithmeticTranscript, TTranscriptInterface};
+use crate::transcript::transcript::{TArithmeticTranscript, TTranscriptInterface, TTranscriptSupportsIO};
 use ark_ff::PrimeField;
 use ark_std::iterable::Iterable;
 use ark_std::log2;
@@ -25,6 +25,7 @@ use std::collections::HashMap;
 use std::iter::once;
 use std::marker::PhantomData;
 use std::ops::Index;
+use ark_ec::pairing::Pairing;
 use tracing::{info_span, instrument};
 use crate::components::commitments::scheme::{TCommitmentEngineProver, TCommitmentEngineVerifier};
 use crate::components::vspark::matrix::tau::sqrt_decomposition::SqrtSplitTauTable;
@@ -46,23 +47,32 @@ pub struct VsparkConfig<F: TFelt> {
 
 
 #[derive(Debug, Clone)]
-pub struct VsparkVerifier<F: TFelt, CommEngine: TCommitmentEngineVerifier> {
+pub struct VsparkVerifier<
+    F: TFelt,
+    CommEngine: TCommitmentEngineVerifier<F>,
+> {
     config: VsparkConfig<F>,
-    commitment_scheme: CommEngine
+    commitment_scheme: CommEngine,
 }
 
 #[derive(Debug, Clone)]
-pub struct VsparkProver<F: TFelt, CommEngine: TCommitmentEngineProver> {
+pub struct VsparkProver<
+    F: ComputationalField,
+    CommEngine: TCommitmentEngineProver<F>
+> {
     pub config: VsparkConfig<F>,
-    pub commitment_scheme: CommEngine
+    pub commitment_scheme: CommEngine,
 }
 
-impl<F: TFelt, CommEngine: TCommitmentEngineProver> VsparkProver<F, CommEngine> {
+impl<
+    F: ComputationalField,
+    CommEngine: TCommitmentEngineProver<F>
+> VsparkProver<F, CommEngine> {
     pub fn verifier(&self) -> VsparkVerifier<F, CommEngine::Verifier> {
-        let Self{config, commitment_scheme} = self;
+        let Self{config, commitment_scheme, .. } = self;
         VsparkVerifier {
             config: config.clone(),
-            commitment_scheme: commitment_scheme.clone().verifier()
+            commitment_scheme: commitment_scheme.clone().verifier(),
         }
     }
 }
@@ -123,7 +133,13 @@ impl<F: TFelt> AlgFnSO<F> for VsparkFinalProd<F> {
     }
 }
 
-impl<F: TFelt, Transcript: TArithmeticTranscript<F>, CommEngine: TCommitmentEngineVerifier> TProtocol<Transcript> for VsparkVerifier<F, CommEngine> {
+impl<
+    F: TFelt,
+    Transcript: TArithmeticTranscript<F>
+    + TTranscriptSupportsIO<CommEngine::Commitment>
+    + TTranscriptSupportsIO<CommEngine::MultiCommitment>,
+    CommEngine: TCommitmentEngineVerifier<F>,
+> TProtocol<Transcript> for VsparkVerifier<F, CommEngine> {
     type ClaimsBefore = EvalClaim<F>;
     type ClaimsAfter = (
         SinglePointClaims<F>,
@@ -134,7 +150,7 @@ impl<F: TFelt, Transcript: TArithmeticTranscript<F>, CommEngine: TCommitmentEngi
 
     #[instrument(name = "VSpark::verify", level = "info", skip_all)]
     fn verify(&self, ctx: &mut Transcript, claims: Self::ClaimsBefore) -> Self::ClaimsAfter {
-        let Self{ config: self_config, commitment_scheme } = self;
+        let Self{ config: self_config, commitment_scheme, .. } = self;
         let EvalClaim {
             ev: e_ev_old,
             point: e_point_old,
@@ -143,6 +159,39 @@ impl<F: TFelt, Transcript: TArithmeticTranscript<F>, CommEngine: TCommitmentEngi
         let (r_x, rs) = rs.split_at(r_size(self_config.nx, self_config.px));
         let (r_y, rs) = rs.split_at(r_size(self_config.ny, self_config.py));
         assert_eq!(rs.len(), 0);
+
+        let span = info_span!("final-prod-inputs").entered();
+        let gamma = (0..self_config.d).map(|_| ctx.challenge()).collect_vec();
+
+        let e_in_gamma_eval = ctx.read();
+
+        let f = VsparkFinalProd::new();
+
+        let sumcheck = DenseSumcheck::new(f, self_config.h + self_config.d);
+
+        let e_claim_sumcheck: SinglePointClaims<F> = sumcheck
+            .verify(ctx, SumClaim(e_in_gamma_eval));
+
+        let [
+        c_ev_sumcheck,
+        i_pull_ev_sumcheck,
+        eq_ev_sumcheck,
+        x_tau_values_leq_l_sumcheck,
+        x_tau_values_leq_r_sumcheck,
+        x_tau_values_mid_l_sumcheck,
+        x_tau_values_mid_r_sumcheck,
+        x_tau_values_ge_l_sumcheck,
+        x_tau_values_ge_r_sumcheck,
+        y_tau_values_leq_l_sumcheck,
+        y_tau_values_leq_r_sumcheck,
+        y_tau_values_mid_l_sumcheck,
+        y_tau_values_mid_r_sumcheck,
+        y_tau_values_ge_l_sumcheck,
+        y_tau_values_ge_r_sumcheck,
+        ] =
+            e_claim_sumcheck.evs.try_into().unwrap();
+        (eq_ev_sumcheck - eq_eval(&gamma, &e_claim_sumcheck.point[self_config.h..])).require();
+        span.exit();
 
         let span = info_span!("lookup-inputs").entered();
         let lookup = Logup::new(vec![
@@ -266,38 +315,6 @@ impl<F: TFelt, Transcript: TArithmeticTranscript<F>, CommEngine: TCommitmentEngi
                 .require();
         }
 
-        let span = info_span!("final-prod-inputs").entered();
-        let gamma = (0..self_config.d).map(|_| ctx.challenge()).collect_vec();
-
-        let e_in_gamma_eval = ctx.read();
-
-        let f = VsparkFinalProd::new();
-
-        let sumcheck = DenseSumcheck::new(f, self_config.h + self_config.d);
-        span.exit();
-
-        let e_claim_sumcheck: SinglePointClaims<F> = sumcheck
-            .verify(ctx, SumClaim(e_in_gamma_eval));
-
-        let [
-        c_ev_sumcheck,
-        i_pull_ev_sumcheck,
-        eq_ev_sumcheck,
-        x_tau_values_leq_l_sumcheck,
-        x_tau_values_leq_r_sumcheck,
-        x_tau_values_mid_l_sumcheck,
-        x_tau_values_mid_r_sumcheck,
-        x_tau_values_ge_l_sumcheck,
-        x_tau_values_ge_r_sumcheck,
-        y_tau_values_leq_l_sumcheck,
-        y_tau_values_leq_r_sumcheck,
-        y_tau_values_mid_l_sumcheck,
-        y_tau_values_mid_r_sumcheck,
-        y_tau_values_ge_l_sumcheck,
-        y_tau_values_ge_r_sumcheck,
-        ] =
-            e_claim_sumcheck.evs.try_into().unwrap();
-        (eq_ev_sumcheck - eq_eval(&gamma, &e_claim_sumcheck.point[self_config.h..])).require();
 
         let reducer = MultiDenseEqSumcheck::new(self_config.h + self_config.d);
 
@@ -505,8 +522,15 @@ impl<F: TFelt, Transcript: TArithmeticTranscript<F>, CommEngine: TCommitmentEngi
     }
 }
 
-impl<F: ComputationalField, Transcript: TArithmeticTranscript<F>, CommEngine: TCommitmentEngineProver> TProverImpl<Transcript>
-    for VsparkProver<F, CommEngine> where <F as TSigUtil>::Constants: From<u64>
+impl<
+    F: ComputationalField,
+    Transcript: TArithmeticTranscript<F>
+    + TTranscriptSupportsIO<<CommEngine::Verifier as TCommitmentEngineVerifier<F>>::Commitment>
+    + TTranscriptSupportsIO<<CommEngine::Verifier as TCommitmentEngineVerifier<F>>::MultiCommitment>,
+    CommEngine: TCommitmentEngineProver<F, CommitmentAdvice=Vec<F>, OpeneingAdvice=Vec<F>, MultiCommitmentAdvice=Vec<Vec<F>>, MultiOpeneingAdvice=Vec<Vec<F>>>,
+> TProverImpl<Transcript> for VsparkProver<F, CommEngine> where
+    <F as TSigUtil>::Constants: From<u64>,
+    CommEngine::Verifier: TCommitmentEngineVerifier<F, MultiConfig=usize, MultiClaim=Vec<EvalClaim<F>>>,
 {
     type Verifier = VsparkVerifier<F, CommEngine::Verifier>;
     type ProverInput = VsparkProverInput<F>;
@@ -522,7 +546,7 @@ impl<F: ComputationalField, Transcript: TArithmeticTranscript<F>, CommEngine: TC
         <Self::Verifier as TProtocol<Transcript>>::ClaimsAfter,
         Self::ProverOutput,
     ) {
-        let Self{ config: self_config, commitment_scheme } = self;
+        let Self{ config: self_config, commitment_scheme, .. } = self;
         let VsparkProverInput {
             e_poly,
             c_poly,
@@ -540,22 +564,9 @@ impl<F: ComputationalField, Transcript: TArithmeticTranscript<F>, CommEngine: TC
         let (r_y, rs) = rs.split_at(r_size(self_config.ny, self_config.py));
         assert_eq!(rs.len(), 0);
 
+        let e_poly_commitment = commitment_scheme.commit(ctx, e_poly.clone());
+
         let span = info_span!("lookup-inputs").entered();
-        let lookup = Logup::new(vec![
-            LookupType::Indexed(self_config.midx, self_config.h + self_config.d),
-            LookupType::Indexed(self_config.midx, self_config.h + self_config.d),
-            LookupType::Indexed(self_config.midx, self_config.h + self_config.d),
-            LookupType::Indexed(self_config.nx + 2 - self_config.midx, self_config.h + self_config.d),
-            LookupType::Indexed(self_config.nx + 2 - self_config.midx, self_config.h + self_config.d),
-            LookupType::Indexed(self_config.nx + 2 - self_config.midx, self_config.h + self_config.d),
-            LookupType::Indexed(self_config.midy, self_config.h + self_config.d),
-            LookupType::Indexed(self_config.midy, self_config.h + self_config.d),
-            LookupType::Indexed(self_config.midy, self_config.h + self_config.d),
-            LookupType::Indexed(self_config.ny + 2 - self_config.midy, self_config.h + self_config.d),
-            LookupType::Indexed(self_config.ny + 2 - self_config.midy, self_config.h + self_config.d),
-            LookupType::Indexed(self_config.ny + 2 - self_config.midy, self_config.h + self_config.d),
-            LookupType::Indexed(self_config.d, self_config.h + self_config.d),
-        ]);
 
         let SqrtSplitTauTable {
             parts: [[x_tau_table_leq_l, x_tau_table_leq_r], [x_tau_table_mid_l, x_tau_table_mid_r], [x_tau_table_ge_l, x_tau_table_ge_r]],
@@ -652,169 +663,9 @@ impl<F: ComputationalField, Transcript: TArithmeticTranscript<F>, CommEngine: TC
         assert_eq!(e_poly.len(), 1 << log2(e_poly.len()));
         assert_eq!(accesses_i.len(), 1 << log2(accesses_i.len()));
         assert_eq!(values_i.len(), 1 << log2(values_i.len()));
-
-        let i_poly_f = i_poly.iter().map(|x| F::from(*x as u64)).collect_vec();
-        // let x_poly_f = x_poly.iter().map(|x| F::from(*x as u64)).collect_vec();
-        // let y_poly_f = y_poly.iter().map(|x| F::from(*x as u64)).collect_vec();
-
-        let mut lookup_advice = vec![];
-
-        for (table, values) in [
-            (x_tau_table_leq_l.clone(), x_tau_values_leq_l.clone()),
-            (x_tau_table_mid_l.clone(), x_tau_values_mid_l.clone()),
-            (x_tau_table_ge_l.clone(), x_tau_values_ge_l.clone()),
-        ] {
-            lookup_advice.push(LookupInput::indexed(
-                table,
-                x_tau_accesses_l.clone(),
-                values,
-                x_tau_indexes_l.clone(),
-            ))
-        }
-        for (table, values) in [
-            (x_tau_table_leq_r.clone(), x_tau_values_leq_r.clone()),
-            (x_tau_table_mid_r.clone(), x_tau_values_mid_r.clone()),
-            (x_tau_table_ge_r.clone(), x_tau_values_ge_r.clone()),
-        ] {
-            lookup_advice.push(LookupInput::indexed(
-                table,
-                x_tau_accesses_r.clone(),
-                values,
-                x_tau_indexes_r.clone(),
-            ))
-        }
-        for (table, values) in [
-            (y_tau_table_leq_l.clone(), y_tau_values_leq_l.clone()),
-            (y_tau_table_mid_l.clone(), y_tau_values_mid_l.clone()),
-            (y_tau_table_ge_l.clone(), y_tau_values_ge_l.clone()),
-        ] {
-            lookup_advice.push(LookupInput::indexed(
-                table,
-                y_tau_accesses_l.clone(),
-                values,
-                y_tau_indexes_l.clone(),
-            ))
-        }
-        for (table, values) in [
-            (y_tau_table_leq_r.clone(), y_tau_values_leq_r.clone()),
-            (y_tau_table_mid_r.clone(), y_tau_values_mid_r.clone()),
-            (y_tau_table_ge_r.clone(), y_tau_values_ge_r.clone()),
-        ] {
-            lookup_advice.push(LookupInput::indexed(
-                table,
-                y_tau_accesses_r.clone(),
-                values,
-                y_tau_indexes_r.clone(),
-            ))
-        }
-        lookup_advice.push(LookupInput::indexed_by_usize(e_adj, accesses_i.clone(), values_i.clone(), i_poly));
         span.exit();
 
-        let lookup_claims: [_; 13] = lookup
-            .prove(ctx, (), lookup_advice)
-            .0
-            .into_iter()
-            .map(|c| {
-                if let LookupClaim::Indexed(c) = c {
-                    c
-                } else {
-                    panic!("Invalid LookupType::Indexed {:?}", c)
-                }
-            })
-            .collect_array()
-            .unwrap();
-
-        let (x_tau_left_claims, lookup_claims) = lookup_claims.split_at(3);
-        let (x_tau_right_claims, lookup_claims) = lookup_claims.split_at(3);
-        let (y_tau_left_claims, lookup_claims) = lookup_claims.split_at(3);
-        let (y_tau_right_claims, lookup_claims) = lookup_claims.split_at(3);
-        let [i_lookup_claim] = lookup_claims else { unreachable!() };
-
-        let (x_tau_left_accesses_claims, x_tau_left_table_claims, x_tau_left_values_claims, x_tau_left_index_claims): (Vec<&EvalClaim<F>>, Vec<&EvalClaim<F>>, Vec<&EvalClaim<F>>, Vec<&EvalClaim<F>>) = 
-            x_tau_left_claims.iter().map(|lookup_claim| {
-                let IndexedLookupClaim {
-                    accesses,
-                    table,
-                    values,
-                    indexes,
-                } = lookup_claim;
-                (accesses, table, values, indexes)
-            }).multiunzip();
-
-        let (x_tau_right_accesses_claims, x_tau_right_table_claims, x_tau_right_values_claims, x_tau_right_index_claims): (Vec<&EvalClaim<F>>, Vec<&EvalClaim<F>>, Vec<&EvalClaim<F>>, Vec<&EvalClaim<F>>) =
-            x_tau_right_claims.iter().map(|lookup_claim| {
-                let IndexedLookupClaim {
-                    accesses,
-                    table,
-                    values,
-                    indexes,
-                } = lookup_claim;
-                (accesses, table, values, indexes)
-            }).multiunzip();
-
-        let (y_tau_left_accesses_claims, y_tau_left_table_claims, y_tau_left_values_claims, y_tau_left_index_claims): (Vec<&EvalClaim<F>>, Vec<&EvalClaim<F>>, Vec<&EvalClaim<F>>, Vec<&EvalClaim<F>>) =
-            y_tau_left_claims.iter().map(|lookup_claim| {
-                let IndexedLookupClaim {
-                    accesses,
-                    table,
-                    values,
-                    indexes,
-                } = lookup_claim;
-                (accesses, table, values, indexes)
-            }).multiunzip();
-
-        let (y_tau_right_accesses_claims, y_tau_right_table_claims, y_tau_right_values_claims, y_tau_right_index_claims): (Vec<&EvalClaim<F>>, Vec<&EvalClaim<F>>, Vec<&EvalClaim<F>>, Vec<&EvalClaim<F>>) =
-            y_tau_right_claims.iter().map(|lookup_claim| {
-                let IndexedLookupClaim {
-                    accesses,
-                    table,
-                    values,
-                    indexes,
-                } = lookup_claim;
-                (accesses, table, values, indexes)
-            }).multiunzip();
-        
-        let IndexedLookupClaim {
-            accesses: i_acc,
-            table: e_adj_claim_lookup,
-            values: i_pull,
-            indexes: i_claim,
-        } = i_lookup_claim;
-
-        for (i, f) in [
-            tau::sqrt_decomposition::parts::leq_l,
-            tau::sqrt_decomposition::parts::mid_l,
-            tau::sqrt_decomposition::parts::ge_l,
-        ].iter().enumerate() {
-            (x_tau_left_table_claims[i].ev - f(self_config.nx, self_config.px, self_config.midx, &x_tau_left_table_claims[i].point, r_x))
-                .require();
-        }
-        for (i, f) in [
-            tau::sqrt_decomposition::parts::leq_r,
-            tau::sqrt_decomposition::parts::mid_r,
-            tau::sqrt_decomposition::parts::ge_r,
-        ].iter().enumerate() {
-            (x_tau_right_table_claims[i].ev - f(self_config.nx, self_config.px, self_config.midx, &x_tau_right_table_claims[i].point, r_x))
-                .require();
-        }
-        for (i, f) in [
-            tau::sqrt_decomposition::parts::leq_l,
-            tau::sqrt_decomposition::parts::mid_l,
-            tau::sqrt_decomposition::parts::ge_l,
-        ].iter().enumerate() {
-            (y_tau_left_table_claims[i].ev - f(self_config.ny, self_config.py, self_config.midy, &y_tau_left_table_claims[i].point, r_y))
-                .require();
-        }
-        for (i, f) in [
-            tau::sqrt_decomposition::parts::leq_r,
-            tau::sqrt_decomposition::parts::mid_r,
-            tau::sqrt_decomposition::parts::ge_r,
-        ].iter().enumerate() {
-            (y_tau_right_table_claims[i].ev - f(self_config.ny, self_config.py, self_config.midy, &y_tau_right_table_claims[i].point, r_y))
-                .require();
-        }
-
-        let span = info_span!("final-prod-inputs").entered();
+        let span = info_span!("final-prod").entered();
         let gamma = (0..self_config.d).map(|_| ctx.challenge()).collect_vec();
 
         let e_in_gamma_eval = evaluate_multivar(&e_poly, &gamma);
@@ -860,7 +711,6 @@ impl<F: ComputationalField, Transcript: TArithmeticTranscript<F>, CommEngine: TC
         );
 
         let sumcheck = DenseSumcheck::new(f, self_config.h + self_config.d);
-        span.exit();
 
         let e_claim_sumcheck: SinglePointClaims<F> = sumcheck
             .prove(ctx, SumClaim(e_in_gamma_eval), e_data)
@@ -886,6 +736,164 @@ impl<F: ComputationalField, Transcript: TArithmeticTranscript<F>, CommEngine: TC
             e_claim_sumcheck.evs.try_into().unwrap();
         (eq_ev_sumcheck - eq_eval(&gamma, &e_claim_sumcheck.point[self_config.h..])).require();
 
+        let rlc = ctx.challenge();
+        let rlc2 = rlc * rlc;
+        let x_tau_values_left_rlc_claim = x_tau_values_leq_l_sumcheck + rlc * x_tau_values_mid_l_sumcheck + rlc2 * x_tau_values_ge_l_sumcheck;
+        let x_tau_values_right_rlc_claim = x_tau_values_leq_r_sumcheck + rlc * x_tau_values_mid_r_sumcheck + rlc2 * x_tau_values_ge_r_sumcheck;
+        let y_tau_values_left_rlc_claim = y_tau_values_leq_l_sumcheck + rlc * y_tau_values_mid_l_sumcheck + rlc2 * y_tau_values_ge_l_sumcheck;
+        let y_tau_values_right_rlc_claim = y_tau_values_leq_r_sumcheck + rlc * y_tau_values_mid_r_sumcheck + rlc2 * y_tau_values_ge_r_sumcheck;
+        span.exit();
+        let rlcf = RLC::new(rlc, 3);
+
+        let i_poly_f = i_poly.iter().map(|x| F::from(*x as u64)).collect_vec();
+        // let x_poly_f = x_poly.iter().map(|x| F::from(*x as u64)).collect_vec();
+        // let y_poly_f = y_poly.iter().map(|x| F::from(*x as u64)).collect_vec();
+        let lookup = Logup::new(vec![
+            LookupType::Indexed(self_config.midx, self_config.h + self_config.d),
+            LookupType::Indexed(self_config.nx + 2 - self_config.midx, self_config.h + self_config.d),
+            LookupType::Indexed(self_config.midy, self_config.h + self_config.d),
+            LookupType::Indexed(self_config.ny + 2 - self_config.midy, self_config.h + self_config.d),
+            LookupType::Indexed(self_config.d, self_config.h + self_config.d),
+        ]);
+
+        let mut lookup_advice = vec![];
+
+        let x_tau_table_l_rlc = rlcf.map_so(&[&x_tau_table_leq_l, &x_tau_table_mid_l, &x_tau_table_ge_l]);
+        let x_tau_values_l_rlc = rlcf.map_so(&[&x_tau_values_leq_l, &x_tau_values_mid_l, &x_tau_values_ge_l]);
+        lookup_advice.push(LookupInput::indexed(
+            x_tau_table_l_rlc.clone(),
+            x_tau_accesses_l.clone(),
+            x_tau_values_l_rlc.clone(),
+            x_tau_indexes_l.clone(),
+        ));
+
+        let x_tau_table_r_rlc = rlcf.map_so(&[&x_tau_table_leq_r, &x_tau_table_mid_r, &x_tau_table_ge_r]);
+        let x_tau_values_r_rlc = rlcf.map_so(&[&x_tau_values_leq_r, &x_tau_values_mid_r, &x_tau_values_ge_r]);
+        lookup_advice.push(LookupInput::indexed(
+            x_tau_table_r_rlc.clone(),
+            x_tau_accesses_r.clone(),
+            x_tau_values_r_rlc.clone(),
+            x_tau_indexes_r.clone(),
+        ));
+
+        let y_tau_table_l_rlc = rlcf.map_so(&[&y_tau_table_leq_l, &y_tau_table_mid_l, &y_tau_table_ge_l]);
+        let y_tau_values_l_rlc = rlcf.map_so(&[&y_tau_values_leq_l, &y_tau_values_mid_l, &y_tau_values_ge_l]);
+        lookup_advice.push(LookupInput::indexed(
+            y_tau_table_l_rlc.clone(),
+            y_tau_accesses_l.clone(),
+            y_tau_values_l_rlc.clone(),
+            y_tau_indexes_l.clone(),
+        ));
+
+        let y_tau_table_r_rlc = rlcf.map_so(&[&y_tau_table_leq_r, &y_tau_table_mid_r, &y_tau_table_ge_r]);
+        let y_tau_values_r_rlc = rlcf.map_so(&[&y_tau_values_leq_r, &y_tau_values_mid_r, &y_tau_values_ge_r]);
+        lookup_advice.push(LookupInput::indexed(
+            y_tau_table_r_rlc.clone(),
+            y_tau_accesses_r.clone(),
+            y_tau_values_r_rlc.clone(),
+            y_tau_indexes_r.clone(),
+        ));
+
+        let tau_commitments = commitment_scheme.multi_commit(ctx, vec![
+            x_tau_table_l_rlc.clone(),
+            x_tau_table_r_rlc.clone(),
+            y_tau_table_l_rlc.clone(),
+            y_tau_table_r_rlc.clone(),
+        ], 4);
+
+        lookup_advice.push(LookupInput::indexed_by_usize(e_adj, accesses_i.clone(), values_i.clone(), i_poly));
+
+        let lookup_claims: [_; 5] = lookup
+            .prove(ctx, (), lookup_advice)
+            .0
+            .into_iter()
+            .map(|c| {
+                if let LookupClaim::Indexed(c) = c {
+                    c
+                } else {
+                    panic!("Invalid LookupType::Indexed {:?}", c)
+                }
+            })
+            .collect_array()
+            .unwrap();
+
+        let [x_tau_left_claims, x_tau_right_claims, y_tau_left_claims, y_tau_right_claims, i_lookup_claim] = lookup_claims else { unreachable!() };
+
+        let IndexedLookupClaim {
+            accesses: x_tau_left_accesses_claims,
+            table: x_tau_left_table_claims,
+            values: x_tau_left_values_claims,
+            indexes: x_tau_left_index_claims
+        } = x_tau_left_claims;
+        let IndexedLookupClaim {
+            accesses: x_tau_right_accesses_claims,
+            table: x_tau_right_table_claims,
+            values: x_tau_right_values_claims,
+            indexes: x_tau_right_index_claims
+        } = x_tau_right_claims;
+        let IndexedLookupClaim {
+            accesses: y_tau_left_accesses_claims,
+            table: y_tau_left_table_claims,
+            values: y_tau_left_values_claims,
+            indexes: y_tau_left_index_claims
+        } = y_tau_left_claims;
+        let IndexedLookupClaim {
+            accesses: y_tau_right_accesses_claims,
+            table: y_tau_right_table_claims,
+            values: y_tau_right_values_claims,
+            indexes: y_tau_right_index_claims
+        } = y_tau_right_claims;
+
+        let IndexedLookupClaim {
+            accesses: i_acc,
+            table: e_adj_claim_lookup,
+            values: i_pull,
+            indexes: i_claim,
+        } = i_lookup_claim;
+
+        (x_tau_left_table_claims.ev
+            - tau::sqrt_decomposition::parts::leq_l(self_config.nx, self_config.px, self_config.midx, &x_tau_left_table_claims.point, r_x)
+            - rlc * tau::sqrt_decomposition::parts::mid_l(self_config.nx, self_config.px, self_config.midx, &x_tau_left_table_claims.point, r_x)
+            - rlc2 * tau::sqrt_decomposition::parts::ge_l(self_config.nx, self_config.px, self_config.midx, &x_tau_left_table_claims.point, r_x)
+        ).require();
+
+        (x_tau_right_table_claims.ev
+            - tau::sqrt_decomposition::parts::leq_r(self_config.nx, self_config.px, self_config.midx, &x_tau_right_table_claims.point, r_x)
+            - rlc * tau::sqrt_decomposition::parts::mid_r(self_config.nx, self_config.px, self_config.midx, &x_tau_right_table_claims.point, r_x)
+            - rlc2 * tau::sqrt_decomposition::parts::ge_r(self_config.nx, self_config.px, self_config.midx, &x_tau_right_table_claims.point, r_x)
+        ).require();
+
+
+        (y_tau_left_table_claims.ev
+            - tau::sqrt_decomposition::parts::leq_l(self_config.ny, self_config.py, self_config.midy, &y_tau_left_table_claims.point, r_y)
+            - rlc * tau::sqrt_decomposition::parts::mid_l(self_config.ny, self_config.py, self_config.midy, &y_tau_left_table_claims.point, r_y)
+            - rlc2 * tau::sqrt_decomposition::parts::ge_l(self_config.ny, self_config.py, self_config.midy, &y_tau_left_table_claims.point, r_y)
+        ).require();
+
+        (y_tau_right_table_claims.ev
+            - tau::sqrt_decomposition::parts::leq_r(self_config.ny, self_config.py, self_config.midy, &y_tau_right_table_claims.point, r_y)
+            - rlc * tau::sqrt_decomposition::parts::mid_r(self_config.ny, self_config.py, self_config.midy, &y_tau_right_table_claims.point, r_y)
+            - rlc2 * tau::sqrt_decomposition::parts::ge_r(self_config.ny, self_config.py, self_config.midy, &y_tau_right_table_claims.point, r_y)
+        ).require();
+
+        commitment_scheme.multi_open(
+            ctx,
+            tau_commitments,
+            vec![
+                x_tau_left_table_claims,
+                x_tau_right_table_claims,
+                y_tau_left_table_claims,
+                y_tau_right_table_claims,
+            ],
+            vec![
+                x_tau_table_l_rlc,
+                x_tau_table_r_rlc,
+                y_tau_table_l_rlc,
+                y_tau_table_r_rlc,
+            ],
+            4
+        );
+
         let reducer = MultiDenseEqSumcheck::new(self_config.h + self_config.d);
 
         let mut claims_mess_1 = reducer
@@ -895,18 +903,10 @@ impl<F: ComputationalField, Transcript: TArithmeticTranscript<F>, CommEngine: TC
                     vec![
                         e_claim_sumcheck.point,
                         i_claim.point.clone(),
-                        x_tau_left_index_claims[0].point.clone(),
-                        x_tau_left_index_claims[1].point.clone(),
-                        x_tau_left_index_claims[2].point.clone(),
-                        x_tau_right_index_claims[0].point.clone(),
-                        x_tau_right_index_claims[1].point.clone(),
-                        x_tau_right_index_claims[2].point.clone(),
-                        y_tau_left_index_claims[0].point.clone(),
-                        y_tau_left_index_claims[1].point.clone(),
-                        y_tau_left_index_claims[2].point.clone(),
-                        y_tau_right_index_claims[0].point.clone(),
-                        y_tau_right_index_claims[1].point.clone(),
-                        y_tau_right_index_claims[2].point.clone(),
+                        x_tau_left_index_claims.point.clone(),
+                        x_tau_right_index_claims.point.clone(),
+                        y_tau_left_index_claims.point.clone(),
+                        y_tau_right_index_claims.point.clone(),
                     ],
                     vec![
                         /* 0  */MultiPointEvalClaimPart::new(1, 0, c_ev_sumcheck),
@@ -914,99 +914,40 @@ impl<F: ComputationalField, Transcript: TArithmeticTranscript<F>, CommEngine: TC
                         /* 2  */MultiPointEvalClaimPart::new(0, 1, i_pull.ev),
                         /* 3  */MultiPointEvalClaimPart::new(2, 1, i_claim.ev),
 
-                        /* 4  */MultiPointEvalClaimPart::new(7, 0, x_tau_values_leq_l_sumcheck),
-                        /* 5  */MultiPointEvalClaimPart::new(9, 0, x_tau_values_mid_l_sumcheck),
-                        /* 6  */MultiPointEvalClaimPart::new(11, 0, x_tau_values_ge_l_sumcheck),
+                        /* 4  */MultiPointEvalClaimPart::new(7, 0, x_tau_values_left_rlc_claim),
+                        /* 4  */MultiPointEvalClaimPart::new(3, 2, x_tau_left_index_claims.ev),
+                        /* 5  */MultiPointEvalClaimPart::new(7, 2, x_tau_left_values_claims.ev),
 
-                        /* 7  */MultiPointEvalClaimPart::new(8, 0, x_tau_values_leq_r_sumcheck),
-                        /* 8  */MultiPointEvalClaimPart::new(10, 0, x_tau_values_mid_r_sumcheck),
-                        /* 9  */MultiPointEvalClaimPart::new(12, 0, x_tau_values_ge_r_sumcheck),
+                        /* 4  */MultiPointEvalClaimPart::new(8, 0, x_tau_values_right_rlc_claim),
+                        /* 6  */MultiPointEvalClaimPart::new(4, 3, x_tau_right_index_claims.ev),
+                        /* 7  */MultiPointEvalClaimPart::new(8, 3, x_tau_right_values_claims.ev),
 
-                        /* 10 */MultiPointEvalClaimPart::new(13, 0, y_tau_values_leq_l_sumcheck),
-                        /* 11 */MultiPointEvalClaimPart::new(15, 0, y_tau_values_mid_l_sumcheck),
-                        /* 12 */MultiPointEvalClaimPart::new(17, 0, y_tau_values_ge_l_sumcheck),
+                        /* 4  */MultiPointEvalClaimPart::new(9, 0, y_tau_values_left_rlc_claim),
+                        /* 8  */MultiPointEvalClaimPart::new(5, 4, y_tau_left_index_claims.ev),
+                        /* 9  */MultiPointEvalClaimPart::new(9, 4, y_tau_left_values_claims.ev),
 
-                        /* 13 */MultiPointEvalClaimPart::new(14, 0, y_tau_values_leq_r_sumcheck),
-                        /* 14 */MultiPointEvalClaimPart::new(16, 0, y_tau_values_mid_r_sumcheck),
-                        /* 15 */MultiPointEvalClaimPart::new(18, 0, y_tau_values_ge_r_sumcheck),
-
-                        /* 16 */MultiPointEvalClaimPart::new(3, 2, x_tau_left_index_claims[0].ev),
-                        /* 17 */MultiPointEvalClaimPart::new(3, 3, x_tau_left_index_claims[1].ev),
-                        /* 18 */MultiPointEvalClaimPart::new(3, 4, x_tau_left_index_claims[2].ev),
-                        /* 19 */MultiPointEvalClaimPart::new(7, 2, x_tau_left_values_claims[0].ev),
-                        /* 20 */MultiPointEvalClaimPart::new(9, 3, x_tau_left_values_claims[1].ev),
-                        /* 21 */MultiPointEvalClaimPart::new(11, 4, x_tau_left_values_claims[2].ev),
-
-                        /* 22 */MultiPointEvalClaimPart::new(4, 5, x_tau_right_index_claims[0].ev),
-                        /* 23 */MultiPointEvalClaimPart::new(4, 6, x_tau_right_index_claims[1].ev),
-                        /* 24 */MultiPointEvalClaimPart::new(4, 7, x_tau_right_index_claims[2].ev),
-                        /* 25 */MultiPointEvalClaimPart::new(8, 5, x_tau_right_values_claims[0].ev),
-                        /* 26 */MultiPointEvalClaimPart::new(10, 6, x_tau_right_values_claims[1].ev),
-                        /* 27 */MultiPointEvalClaimPart::new(12, 7, x_tau_right_values_claims[2].ev),
-
-                        /* 28 */MultiPointEvalClaimPart::new(5, 8, y_tau_left_index_claims[0].ev),
-                        /* 29 */MultiPointEvalClaimPart::new(5, 9, y_tau_left_index_claims[1].ev),
-                        /* 30 */MultiPointEvalClaimPart::new(5, 10, y_tau_left_index_claims[2].ev),
-                        /* 31 */MultiPointEvalClaimPart::new(13, 8, y_tau_left_values_claims[0].ev),
-                        /* 32 */MultiPointEvalClaimPart::new(15, 9, y_tau_left_values_claims[1].ev),
-                        /* 33 */MultiPointEvalClaimPart::new(17, 10, y_tau_left_values_claims[2].ev),
-
-                        /* 34 */MultiPointEvalClaimPart::new(6, 11, y_tau_right_index_claims[0].ev),
-                        /* 35 */MultiPointEvalClaimPart::new(6, 12, y_tau_right_index_claims[1].ev),
-                        /* 36 */MultiPointEvalClaimPart::new(6, 13, y_tau_right_index_claims[2].ev),
-                        /* 37 */MultiPointEvalClaimPart::new(14, 11, y_tau_right_values_claims[0].ev),
-                        /* 38 */MultiPointEvalClaimPart::new(16, 12, y_tau_right_values_claims[1].ev),
-                        /* 39 */MultiPointEvalClaimPart::new(18, 13, y_tau_right_values_claims[2].ev),
+                        /* 4  */MultiPointEvalClaimPart::new(10, 0, y_tau_values_right_rlc_claim),
+                        /* 10 */MultiPointEvalClaimPart::new(6, 5, y_tau_right_index_claims.ev),
+                        /* 11 */MultiPointEvalClaimPart::new(10, 5, y_tau_right_values_claims.ev),
                     ],
                 ),
                 vec![
-                    values_i,
-                    c_poly,
-                    i_poly_f,
-                    x_tau_indexes_l,
-                    x_tau_indexes_r,
-                    y_tau_indexes_l,
-                    y_tau_indexes_r,
-                    x_tau_values_leq_l,
-                    x_tau_values_leq_r,
-                    x_tau_values_mid_l,
-                    x_tau_values_mid_r,
-                    x_tau_values_ge_l,
-                    x_tau_values_ge_r,
-                    y_tau_values_leq_l,
-                    y_tau_values_leq_r,
-                    y_tau_values_mid_l,
-                    y_tau_values_mid_r,
-                    y_tau_values_ge_l,
-                    y_tau_values_ge_r,
+                    /* 0  */values_i,
+                    /* 1  */c_poly,
+                    /* 2  */i_poly_f,
+                    /* 3  */x_tau_indexes_l,
+                    /* 4  */x_tau_indexes_r,
+                    /* 5  */y_tau_indexes_l,
+                    /* 6  */y_tau_indexes_r,
+                    /* 7  */x_tau_values_l_rlc,
+                    /* 8  */x_tau_values_r_rlc,
+                    /* 9  */y_tau_values_l_rlc,
+                    /* 10 */y_tau_values_r_rlc,
                 ],
             )
             .0;
 
         (claims_mess_1.evs[1] - claims_mess_1.evs[2]).require();
-
-        (claims_mess_1.evs[4] - claims_mess_1.evs[19]).require();
-        (claims_mess_1.evs[5] - claims_mess_1.evs[20]).require();
-        (claims_mess_1.evs[6] - claims_mess_1.evs[21]).require();
-        (claims_mess_1.evs[7] - claims_mess_1.evs[25]).require();
-        (claims_mess_1.evs[8] - claims_mess_1.evs[26]).require();
-        (claims_mess_1.evs[9] - claims_mess_1.evs[27]).require();
-        (claims_mess_1.evs[10] - claims_mess_1.evs[31]).require();
-        (claims_mess_1.evs[11] - claims_mess_1.evs[32]).require();
-        (claims_mess_1.evs[12] - claims_mess_1.evs[33]).require();
-        (claims_mess_1.evs[13] - claims_mess_1.evs[37]).require();
-        (claims_mess_1.evs[14] - claims_mess_1.evs[38]).require();
-        (claims_mess_1.evs[15] - claims_mess_1.evs[39]).require();
-
-        (claims_mess_1.evs[16] - claims_mess_1.evs[17]).require();
-        (claims_mess_1.evs[16] - claims_mess_1.evs[18]).require();
-        (claims_mess_1.evs[22] - claims_mess_1.evs[23]).require();
-        (claims_mess_1.evs[22] - claims_mess_1.evs[24]).require();
-        (claims_mess_1.evs[28] - claims_mess_1.evs[29]).require();
-        (claims_mess_1.evs[28] - claims_mess_1.evs[30]).require();
-        (claims_mess_1.evs[34] - claims_mess_1.evs[35]).require();
-        (claims_mess_1.evs[34] - claims_mess_1.evs[36]).require();
-
 
         let reducer2 = MultiDenseEqSumcheck::new(self_config.d);
 
@@ -1039,86 +980,14 @@ impl<F: ComputationalField, Transcript: TArithmeticTranscript<F>, CommEngine: TC
         (claims_mess_2.evs[0] - claims_mess_2.evs[1]).require();
         (claims_mess_2.evs[0] - claims_mess_2.evs[2]).require();
 
-        let reducer_x_accesses_left = MultiDenseEqSumcheck::new(self_config.midx);
-        let (x_accesses_unified_claim_left, _) = reducer_x_accesses_left.prove(
-            ctx,
-            MultiPointEvalClaim::new(
-                x_tau_left_accesses_claims.iter().map(|c| c.point.clone()).collect_vec(),
-                x_tau_left_accesses_claims.iter().enumerate().map(|(i, c)| MultiPointEvalClaimPart::new(0, i, c.ev)).collect_vec(),
-            ),
-            vec![
-                x_tau_accesses_l,
-            ],
-
-        );
-        (x_accesses_unified_claim_left.evs[0] - x_accesses_unified_claim_left.evs[1]).require();
-        (x_accesses_unified_claim_left.evs[0] - x_accesses_unified_claim_left.evs[2]).require();
-
-        let reducer_x_accesses_right = MultiDenseEqSumcheck::new(self_config.nx + 2 - self_config.midx);
-        let (x_accesses_unified_claim_right, _) = reducer_x_accesses_right.prove(
-            ctx,
-            MultiPointEvalClaim::new(
-                x_tau_right_accesses_claims.iter().map(|c| c.point.clone()).collect_vec(),
-                x_tau_right_accesses_claims.iter().enumerate().map(|(i, c)| MultiPointEvalClaimPart::new(0, i, c.ev)).collect_vec(),
-            ),
-            vec![
-                x_tau_accesses_r,
-            ],
-
-        );
-        (x_accesses_unified_claim_right.evs[0] - x_accesses_unified_claim_right.evs[1]).require();
-        (x_accesses_unified_claim_right.evs[0] - x_accesses_unified_claim_right.evs[2]).require();
-
         let x_accesses_claims = [
-            EvalClaim{
-                ev: x_accesses_unified_claim_left.evs[0],
-                point: x_accesses_unified_claim_left.point,
-            },
-            EvalClaim{
-                ev: x_accesses_unified_claim_right.evs[0],
-                point: x_accesses_unified_claim_right.point,
-            },
+            x_tau_left_accesses_claims,
+            x_tau_right_accesses_claims,
         ];
 
-        let reducer_y_accesses_left = MultiDenseEqSumcheck::new(self_config.midy);
-        let (y_accesses_unified_claim_left, _) = reducer_y_accesses_left.prove(
-            ctx,
-            MultiPointEvalClaim::new(
-                y_tau_left_accesses_claims.iter().map(|c| c.point.clone()).collect_vec(),
-                y_tau_left_accesses_claims.iter().enumerate().map(|(i, c)| MultiPointEvalClaimPart::new(0, i, c.ev)).collect_vec(),
-            ),
-            vec![
-                y_tau_accesses_l,
-            ],
-
-        );
-        (y_accesses_unified_claim_left.evs[0] - y_accesses_unified_claim_left.evs[1]).require();
-        (y_accesses_unified_claim_left.evs[0] - y_accesses_unified_claim_left.evs[2]).require();
-
-        let reducer_y_accesses_right = MultiDenseEqSumcheck::new(self_config.ny + 2 - self_config.midy);
-        let (y_accesses_unified_claim_right, _) = reducer_y_accesses_right.prove(
-            ctx,
-            MultiPointEvalClaim::new(
-                y_tau_right_accesses_claims.iter().map(|c| c.point.clone()).collect_vec(),
-                y_tau_right_accesses_claims.iter().enumerate().map(|(i, c)| MultiPointEvalClaimPart::new(0, i, c.ev)).collect_vec(),
-            ),
-            vec![
-                y_tau_accesses_r,
-            ],
-
-        );
-        (y_accesses_unified_claim_right.evs[0] - y_accesses_unified_claim_right.evs[1]).require();
-        (y_accesses_unified_claim_right.evs[0] - y_accesses_unified_claim_right.evs[2]).require();
-
         let y_accesses_claims = [
-            EvalClaim{
-                ev: y_accesses_unified_claim_left.evs[0],
-                point: y_accesses_unified_claim_left.point,
-            },
-            EvalClaim{
-                ev: y_accesses_unified_claim_right.evs[0],
-                point: y_accesses_unified_claim_right.point,
-            },
+            y_tau_left_accesses_claims,
+            y_tau_right_accesses_claims,
         ];
 
         // All these claims should be returned.
@@ -1141,7 +1010,7 @@ pub mod bench_parts {
     use crate::common::wrapper::{ComputationalField, TFelt, TSigUtil};
     use crate::components::commitments::knuckles::KnucklesSetup;
     use crate::components::commitments::kzg::KZGSetup;
-    use crate::components::commitments::scheme::TCommitmentEngineProver;
+    use crate::components::commitments::scheme::{TCommitmentEngineProver, TCommitmentEngineVerifier};
     use crate::components::vspark::matrix::{r_size, tau, VsparkMatrixGroup};
     use crate::components::vspark::sqrt_vspark::{VsparkConfig, VsparkProver};
     use crate::components::vspark::vspark::VsparkProverInput;
@@ -1200,7 +1069,14 @@ pub mod bench_parts {
             },
         }
     }
-    pub fn run_sqrt_vspark<F: ComputationalField, CommEngine: TCommitmentEngineProver>(vspark: &VsparkProver<F, CommEngine>, input: VsparkTestcaseData<F>) where <F as TSigUtil>::Constants: From<u64>  {
+    pub fn run_sqrt_vspark<
+        F: ComputationalField,
+        CommEngine: TCommitmentEngineProver<F, CommitmentAdvice=Vec<F>, OpeneingAdvice=Vec<F>, MultiCommitmentAdvice=Vec<Vec<F>>, MultiOpeneingAdvice=Vec<Vec<F>>>
+    >(vspark: &VsparkProver<F, CommEngine>, input: VsparkTestcaseData<F>)
+    where
+        <F as TSigUtil>::Constants: From<u64>,
+        CommEngine::Verifier: TCommitmentEngineVerifier<F, MultiConfig=usize, MultiClaim=Vec<EvalClaim<F>>>
+    {
         let span = info_span!("sqrt").entered();
         let mut transcript_p = ProofTranscript::start_prover("asd".as_bytes());
         let (output_claims, _) = vspark.prove(&mut transcript_p, input.eval_claim.clone(), input.prover_input);
@@ -1234,7 +1110,6 @@ mod tests {
     use tracing_subscriber::{fmt, prelude::*, reload, EnvFilter, Layer, Registry};
     use crate::components::commitments::knuckles::KnucklesProvingKey;
     use crate::components::commitments::kzg::{random_kzg_pk, KzgProvingKey};
-    use crate::components::commitments::scheme::CommitmentMode;
     use crate::components::vspark::sqrt_vspark::bench_parts::build_sqrt_vspark_data;
     use crate::test_utils::data::load_or_generate_data;
     use crate::transcript::transcript::ProofTranscript;
@@ -1251,7 +1126,7 @@ mod tests {
             let N = 1 << num_vars;
             let vspark = VsparkProver{
                 config: VsparkConfig::<F>::new(nx, midx, px, ny, midy, py, h, d),
-                commitment_scheme: KnucklesProvingKey::<ark_bn254::Bn254, CommitmentMode>::new(random_kzg_pk(2 * N - 1, rng), num_vars, <ark_bn254::Bn254 as Pairing>::ScalarField::rand(rng)),
+                commitment_scheme: KnucklesProvingKey::<ark_bn254::Bn254>::new(random_kzg_pk(2 * N - 1, rng), num_vars, <ark_bn254::Bn254 as Pairing>::ScalarField::rand(rng)),
             };
 
             let rd = (0..d).map(|_| F::rand(rng)).collect_vec();
@@ -1321,7 +1196,8 @@ mod tests {
                 let mut transcript_p = ProofTranscript::start_prover(b"test");
                 let vspark = VsparkProver{
                     config: vspark_config,
-                    commitment_scheme: KnucklesProvingKey::<ark_bn254::Bn254, CommitmentMode>::build(test_data.knuckles_setup),
+                    commitment_scheme: KnucklesProvingKey::<ark_bn254::Bn254>::build(test_data.knuckles_setup),
+                    _pd: Default::default(),
                 };
                 let (output_claims, _) = vspark.prove(&mut transcript_p, test_data.eval_claim.clone(), test_data.prover_input);
                 let proof = transcript_p.end();

@@ -1347,7 +1347,7 @@ mod tests {
         for ((a, b), tag) in err.1.iter().zip(err.2.iter()) {
             println!("err val: {} {} {}", tag, a, b);
         }
-        assert_eq!(err.0, vec![]);
+        assert_eq!(0, err.0.len());
 
         let rng = &mut test_rng();
         let tbl = tau::no_decomposition::table(n, p, &r);

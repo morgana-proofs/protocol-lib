@@ -11,69 +11,131 @@ use ark_ec::pairing::Pairing;
 use ark_ff::PrimeField;
 use ark_serialize::{CanonicalDeserialize, CanonicalSerialize};
 use ark_std::{One, UniformRand};
+use ark_std::iterable::Iterable;
 use ark_std::rand::Rng;
 use rayon::iter::IntoParallelIterator;
 use rayon::iter::ParallelIterator;
 use crate::common::claims::UnivarEvalClaim;
-use crate::common::wrapper::TFelt;
-use crate::components::commitments::scheme::{CommitmentMode, CommitmentSchemeMode, OpeningMode, TPairVerifier};
+use crate::common::wrapper::{ComputationalField, TFelt};
+use crate::components::commitments::knuckles::{KnucklesProvingKey, KnucklesVerifyingKey};
+use crate::components::commitments::scheme::{TCommitmentEngineProver, TCommitmentEngineVerifier, TPairVerifier};
 use crate::protocol::component::{TProtocol, TProverImpl};
 use crate::transcript::transcript::{TArithmeticTranscript, TTranscriptSupportsIO};
 
 #[derive(Clone)]
-pub struct KzgProvingKey<Ctx: Pairing, Mode: CommitmentSchemeMode> {
+pub struct KzgProvingKey<Ctx: Pairing> {
     ptau_1: Vec<Ctx::G1Affine>,
     h0: Ctx::G2Affine,
     h1: Ctx::G2Affine,
-    _pd: PhantomData<Mode>,
+}
+
+impl<
+    P: Pairing,
+> TCommitmentEngineProver<P::ScalarField> for KzgProvingKey<P> {
+    type Verifier = KzgVerifyingKey<P>;
+    type OpeneingAdvice = Vec<P::ScalarField>;
+    type MultiOpeneingAdvice = Vec<Vec<P::ScalarField>>;
+    type CommitmentAdvice = Vec<P::ScalarField>;
+    type MultiCommitmentAdvice = Vec<Vec<P::ScalarField>>;
+
+    fn verifier(&self) -> Self::Verifier {
+        self.verifying_key()
+    }
+
+    fn open<Transcript: TArithmeticTranscript<P::ScalarField> + TTranscriptSupportsIO<P::G1> + TTranscriptSupportsIO<Vec<P::G1>>>(&self, ctx: &mut Transcript, commitment: <Self::Verifier as TCommitmentEngineVerifier<P::ScalarField>>::Commitment, claim: <Self::Verifier as TCommitmentEngineVerifier<P::ScalarField>>::Claim, advice: Self::OpeneingAdvice) -> () {
+        let (quotient_commitment, div_eval) = self._open(&advice, claim.ev);
+        ctx.write(&quotient_commitment);
+    }
+
+    fn commit<Transcript: TArithmeticTranscript<P::ScalarField> + TTranscriptSupportsIO<P::G1> + TTranscriptSupportsIO<Vec<P::G1>>>(&self, ctx: &mut Transcript, advice: Self::CommitmentAdvice) -> <Self::Verifier as TCommitmentEngineVerifier<P::ScalarField>>::Commitment {
+        let commitment = self._commit(&advice);
+        ctx.write(&commitment);
+        commitment
+    }
+
+    fn multi_open<Transcript: TArithmeticTranscript<P::ScalarField> + TTranscriptSupportsIO<P::G1> + TTranscriptSupportsIO<Vec<P::G1>>>(&self, ctx: &mut Transcript, commitment: <Self::Verifier as TCommitmentEngineVerifier<P::ScalarField>>::MultiCommitment, claim: <Self::Verifier as TCommitmentEngineVerifier<P::ScalarField>>::MultiClaim, advice: Self::MultiOpeneingAdvice, cfg: <Self::Verifier as TCommitmentEngineVerifier<P::ScalarField>>::MultiConfig) -> () {
+        assert!(commitment.len() == advice.len());
+        assert!(commitment.len() == claim.len());
+        assert!(commitment.len() == cfg);
+        commitment.into_iter().zip(claim.into_iter().zip(advice.into_iter())).for_each(|(commitment, (claim, advice))| self.open(ctx, commitment, claim, advice));
+    }
+
+    fn multi_commit<Transcript: TArithmeticTranscript<P::ScalarField> + TTranscriptSupportsIO<P::G1> + TTranscriptSupportsIO<Vec<P::G1>>>(&self, ctx: &mut Transcript, advice: Self::MultiCommitmentAdvice, cfg: <Self::Verifier as TCommitmentEngineVerifier<P::ScalarField>>::MultiConfig) -> <Self::Verifier as TCommitmentEngineVerifier<P::ScalarField>>::MultiCommitment {
+        assert!(advice.len() == cfg);
+        advice.into_iter().map(|advice| self.commit(ctx, advice)).collect()
+    }
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
-pub struct KzgVerifyingKey<Ctx: Pairing, Mode: CommitmentSchemeMode> {
+pub struct KzgVerifyingKey<Ctx: Pairing> {
     tau0: Ctx::G1Affine,
     h0: Ctx::G2Affine,
     h1: Ctx::G2Affine,
-    _pd: PhantomData<Mode>,
 }
-impl<Ctx: Pairing, Mode: CommitmentSchemeMode> KzgVerifyingKey<Ctx, Mode> {
-    pub(crate) fn commitment(self) -> KzgVerifyingKey<Ctx, CommitmentMode> {
+
+impl<Ctx: Pairing> TCommitmentEngineVerifier<Ctx::ScalarField> for KzgVerifyingKey<Ctx> {
+    type Commitment = Ctx::G1;
+    type Claim = UnivarEvalClaim<Ctx::ScalarField>;
+    type MultiCommitment = Vec<Self::Commitment>;
+    type MultiClaim = Vec<Self::Claim>;
+    type MultiConfig = usize;
+
+    fn open<Transcript: TArithmeticTranscript<Ctx::ScalarField> + TTranscriptSupportsIO<Ctx::G1> + TTranscriptSupportsIO<Vec<Ctx::G1>>>(&self, ctx: &mut Transcript, commitment: Self::Commitment, claim: Self::Claim) -> () {
+        let quotient_commitment: <Self as TPairVerifier>::G1 = ctx.read();
+        let (left, right) = self.verify_reduce_to_pair(commitment, quotient_commitment, claim.point, claim.ev);
+        self.verify_pair(left, right);
+    }
+
+    fn commit<Transcript: TArithmeticTranscript<Ctx::ScalarField> + TTranscriptSupportsIO<Ctx::G1> + TTranscriptSupportsIO<Vec<Ctx::G1>>>(&self, ctx: &mut Transcript) -> Self::Commitment {
+        ctx.read()
+    }
+
+    fn multi_open<Transcript: TArithmeticTranscript<Ctx::ScalarField> + TTranscriptSupportsIO<Ctx::G1> + TTranscriptSupportsIO<Vec<Ctx::G1>>>(&self, ctx: &mut Transcript, commitment: Self::MultiCommitment, claim: Self::MultiClaim, cfg: Self::MultiConfig) -> () {
+        assert!(claim.len() == cfg);
+        assert!(commitment.len() == cfg);
+        commitment.into_iter().zip(claim.into_iter()).for_each(|(commitment, claim)| self.open(ctx, commitment, claim) );
+    }
+
+    fn multi_commit<Transcript: TArithmeticTranscript<Ctx::ScalarField> + TTranscriptSupportsIO<Ctx::G1> + TTranscriptSupportsIO<Vec<Ctx::G1>>>(&self, ctx: &mut Transcript, cfg: Self::MultiConfig) -> Self::MultiCommitment {
+        (0..cfg).map(|_| self.commit(ctx)).collect()
+    }
+}
+
+impl<Ctx: Pairing> KzgVerifyingKey<Ctx> {
+    pub(crate) fn commitment(self) -> KzgVerifyingKey<Ctx> {
         KzgVerifyingKey {
             tau0: self.tau0,
             h0: self.h0,
             h1: self.h1,
-            _pd: Default::default(),
         }
     }
-    pub(crate) fn opening(self) -> KzgVerifyingKey<Ctx, OpeningMode> {
+    pub(crate) fn opening(self) -> KzgVerifyingKey<Ctx> {
         KzgVerifyingKey {
             tau0: self.tau0,
             h0: self.h0,
             h1: self.h1,
-            _pd: Default::default(),
         }
     }
 }
 
-impl<Ctx: Pairing, Mode: CommitmentSchemeMode> KzgProvingKey<Ctx, Mode> {
-    pub(crate) fn commitment(self) -> KzgProvingKey<Ctx, CommitmentMode> {
+impl<Ctx: Pairing> KzgProvingKey<Ctx> {
+    pub(crate) fn commitment(self) -> KzgProvingKey<Ctx> {
         KzgProvingKey {
             ptau_1: self.ptau_1,
             h0: self.h0,
             h1: self.h1,
-            _pd: Default::default(),
         }
     }
-    pub(crate) fn opening(self) -> KzgProvingKey<Ctx, OpeningMode> {
+    pub(crate) fn opening(self) -> KzgProvingKey<Ctx> {
         KzgProvingKey {
             ptau_1: self.ptau_1,
             h0: self.h0,
             h1: self.h1,
-            _pd: Default::default(),
         }
     }
 }
 
-impl<Ctx: Pairing> KzgVerifyingKey<Ctx, OpeningMode> {
+impl<Ctx: Pairing> KzgVerifyingKey<Ctx> {
 
     /// Directly verifies KZG opening proof.
     pub fn verify_directly(
@@ -105,7 +167,7 @@ impl<Ctx: Pairing> KzgVerifyingKey<Ctx, OpeningMode> {
     }
 }
 
-impl<Ctx: Pairing, Mode: CommitmentSchemeMode> TPairVerifier for KzgVerifyingKey<Ctx, Mode> {
+impl<Ctx: Pairing> TPairVerifier for KzgVerifyingKey<Ctx> {
     type G1 = Ctx::G1;
 
     fn verify_pair(&self, a: Self::G1, b: Self::G1) {
@@ -135,7 +197,7 @@ pub struct KZGSetup<P: Pairing> {
     pub size: usize,
 }
 
-impl<Ctx: Pairing> KzgProvingKey<Ctx, CommitmentMode> {
+impl<Ctx: Pairing> KzgProvingKey<Ctx> {
     pub fn mock_setup(tau: Ctx::ScalarField, g0: Ctx::G1Affine, h0: Ctx::G2Affine, size: usize) -> Self {
         let mut powers_of_tau = Vec::with_capacity(size);
         let mut p = Ctx::ScalarField::one();
@@ -148,13 +210,13 @@ impl<Ctx: Pairing> KzgProvingKey<Ctx, CommitmentMode> {
 
         let ptau1_proj: Vec<Ctx::G1> = powers_of_tau.into_par_iter().map(|sc| g0 * sc).collect();
 
-        Self { ptau_1: Ctx::G1::normalize_batch(&ptau1_proj), h0, h1, _pd: Default::default()}
+        Self { ptau_1: Ctx::G1::normalize_batch(&ptau1_proj), h0, h1}
     }
     pub fn load(file: &mut File) -> Self {
         todo!()
     }
 }
-impl<Ctx: Pairing, Mode: CommitmentSchemeMode> KzgProvingKey<Ctx, Mode> {
+impl<Ctx: Pairing> KzgProvingKey<Ctx> {
 
 
     pub fn dump(&self, file: &mut File) {
@@ -173,23 +235,23 @@ impl<Ctx: Pairing, Mode: CommitmentSchemeMode> KzgProvingKey<Ctx, Mode> {
         &self.h1
     }
 
-    pub fn verifying_key(&self) -> KzgVerifyingKey<Ctx, Mode> {
-        KzgVerifyingKey { tau0: self.ptau_1[0], h0: self.h0, h1: self.h1, _pd: Default::default() }
+    pub fn verifying_key(&self) -> KzgVerifyingKey<Ctx> {
+        KzgVerifyingKey { tau0: self.ptau_1[0], h0: self.h0, h1: self.h1 }
     }
 
-    pub fn commit(&self, poly: &[Ctx::ScalarField]) -> Ctx::G1 {
+    pub fn _commit(&self, poly: &[Ctx::ScalarField]) -> Ctx::G1 {
         assert!(poly.len() <= self.ptau_1.len(), "Vector is too large.");
         <Ctx::G1 as VariableBaseMSM>::msm(&self.ptau_1[..poly.len()], poly).unwrap()
     }
 
     /// Given a polynomial, returns a commitment to its quotient by x-pt, and the univariate opening.
-    pub fn open(&self, poly: &[Ctx::ScalarField], pt: Ctx::ScalarField) -> (Ctx::G1, Ctx::ScalarField) {
+    pub fn _open(&self, poly: &[Ctx::ScalarField], pt: Ctx::ScalarField) -> (Ctx::G1, Ctx::ScalarField) {
         let (a, b) = div_by_linear(poly, pt);
-        (self.commit(&a), b)
+        (self._commit(&a), b)
     }
 }
 
-pub fn random_kzg_pk<Ctx: Pairing>(size: usize, rng: &mut impl Rng) -> KzgProvingKey<Ctx, CommitmentMode> {
+pub fn random_kzg_pk<Ctx: Pairing>(size: usize, rng: &mut impl Rng) -> KzgProvingKey<Ctx> {
     let tau = <Ctx as Pairing>::ScalarField::rand(rng);
     let g0 = <Ctx as Pairing>::G1Affine::rand(rng);
     let h0 = <Ctx as Pairing>::G2Affine::rand(rng);
@@ -205,54 +267,6 @@ pub fn ev<F: PrimeField>(poly : &[F], x: F) -> F {
     }
     acc
 }
-
-impl<F: TFelt, Transcript: TArithmeticTranscript<F> + TTranscriptSupportsIO<P::G1>, P: Pairing<ScalarField=F>> TProtocol<Transcript> for KzgVerifyingKey<P, CommitmentMode> {
-    type ClaimsBefore = ();
-    type ClaimsAfter = <Self as TPairVerifier>::G1;
-
-    fn verify(&self, ctx: &mut Transcript, claims: Self::ClaimsBefore) -> Self::ClaimsAfter {
-        ctx.read()
-    }
-}
-
-impl<F: TFelt, Transcript: TArithmeticTranscript<F> + TTranscriptSupportsIO<P::G1>, P: Pairing<ScalarField=F>> TProtocol<Transcript> for KzgVerifyingKey<P, OpeningMode> {
-    type ClaimsBefore = (UnivarEvalClaim<F>, <Self as TPairVerifier>::G1);
-    type ClaimsAfter = ();
-
-    fn verify(&self, ctx: &mut Transcript, claims: Self::ClaimsBefore) -> Self::ClaimsAfter {
-        let (eval_claim, commitment) = claims;
-        let quotient_commitment: <Self as TPairVerifier>::G1 = ctx.read();
-        let (left, right) = self.verify_reduce_to_pair(commitment, quotient_commitment, eval_claim.point, eval_claim.ev);
-        self.verify_pair(left, right);
-    }
-}
-
-impl<F: TFelt, Transcript: TArithmeticTranscript<F> + TTranscriptSupportsIO<P::G1>, P: Pairing<ScalarField=F>> TProverImpl<Transcript> for KzgProvingKey<P, OpeningMode> {
-    type Verifier = KzgVerifyingKey<P, OpeningMode>;
-    type ProverInput = Vec<F>;
-    type ProverOutput = ();
-
-    fn prove(&self, ctx: &mut Transcript, claims: <Self::Verifier as TProtocol<Transcript>>::ClaimsBefore, advice: Self::ProverInput) -> (<Self::Verifier as TProtocol<Transcript>>::ClaimsAfter, Self::ProverOutput) {
-        let (eval_claim, commitment) = claims;
-        let (quotient_commitment, div_eval) = self.open(&advice, eval_claim.ev);
-        ctx.write(&quotient_commitment);
-
-        ((),())
-    }
-}
-
-impl<F: TFelt, Transcript: TArithmeticTranscript<F> + TTranscriptSupportsIO<P::G1>, P: Pairing<ScalarField=F>> TProverImpl<Transcript> for KzgProvingKey<P, CommitmentMode> {
-    type Verifier = KzgVerifyingKey<P, CommitmentMode>;
-    type ProverInput = Vec<F>;
-    type ProverOutput = ();
-
-    fn prove(&self, ctx: &mut Transcript, claims: <Self::Verifier as TProtocol<Transcript>>::ClaimsBefore, advice: Self::ProverInput) -> (<Self::Verifier as TProtocol<Transcript>>::ClaimsAfter, Self::ProverOutput) {
-        let commitment = self.commit(&advice);
-        ctx.write(&commitment);
-        (commitment, ())
-    }
-}
-
 
 #[cfg(test)]
 mod tests {
@@ -280,13 +294,13 @@ mod tests {
     fn poly_open() {
         let rng = &mut test_rng();
         let poly = random_poly(97, rng);
-        let srs : KzgProvingKey<Ctx, _> = random_kzg_pk(128, rng);
+        let srs : KzgProvingKey<Ctx> = random_kzg_pk(128, rng);
         let vkey = srs.verifying_key().opening();
 
         let opening_at = Fr::rand(rng);
 
-        let poly_commitment = srs.commit(&poly);
-        let opening_proof = srs.open(&poly, opening_at);
+        let poly_commitment = srs._commit(&poly);
+        let opening_proof = srs._open(&poly, opening_at);
         let (quotient_commitment, opening) = opening_proof;
 
         vkey.verify_directly(poly_commitment, quotient_commitment, opening_at, opening);
