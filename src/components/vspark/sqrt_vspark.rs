@@ -530,7 +530,7 @@ impl<
     CommEngine: TCommitmentEngineProver<F, CommitmentAdvice=Vec<F>, OpeneingAdvice=Vec<F>, MultiCommitmentAdvice=Vec<Vec<F>>, MultiOpeneingAdvice=Vec<Vec<F>>>,
 > TProverImpl<Transcript> for VsparkProver<F, CommEngine> where
     <F as TSigUtil>::Constants: From<u64>,
-    CommEngine::Verifier: TCommitmentEngineVerifier<F, MultiConfig=usize, MultiClaim=Vec<EvalClaim<F>>>,
+    CommEngine::Verifier: TCommitmentEngineVerifier<F, MultiConfig=usize, MultiClaim=Vec<EvalClaim<F>>, Claim=EvalClaim<F>>,
 {
     type Verifier = VsparkVerifier<F, CommEngine::Verifier>;
     type ProverInput = VsparkProverInput<F>;
@@ -564,9 +564,26 @@ impl<
         let (r_y, rs) = rs.split_at(r_size(self_config.ny, self_config.py));
         assert_eq!(rs.len(), 0);
 
-        let e_poly_commitment = commitment_scheme.commit(ctx, e_poly.clone());
+        let delta_poly = eq_poly(&vec![F::zero(); self_config.d]);
+        let e_adj = e_poly
+            .iter()
+            .zip(delta_poly.iter())
+            .map(|(e, d)| *e + d)
+            .collect_vec();
 
-        let span = info_span!("lookup-inputs").entered();
+        let mut accesses_i = e_poly.iter().map(|_| F::zero()).collect::<Vec<_>>();
+        let values_i = i_poly
+            .iter()
+            .map(|idx| {
+                accesses_i[*idx] += F::one();
+                e_adj[*idx]
+            })
+            .collect::<Vec<_>>();
+
+        let e_poly_commitment = commitment_scheme.commit(
+            ctx,
+            e_poly.clone(),
+        );
 
         let SqrtSplitTauTable {
             parts: [[x_tau_table_leq_l, x_tau_table_leq_r], [x_tau_table_mid_l, x_tau_table_mid_r], [x_tau_table_ge_l, x_tau_table_ge_r]],
@@ -644,28 +661,10 @@ impl<
                 y_tau_values_ge_r.push(y_tau_table_ge_r[r_idx]);
             });
 
-        let delta_poly = eq_poly(&vec![F::zero(); self_config.d]);
-        let e_adj = e_poly
-            .iter()
-            .zip(delta_poly.iter())
-            .map(|(e, d)| *e + d)
-            .collect_vec();
-
-        let mut accesses_i = e_poly.iter().map(|_| F::zero()).collect::<Vec<_>>();
-        let values_i = i_poly
-            .iter()
-            .map(|idx| {
-                accesses_i[*idx] += F::one();
-                e_adj[*idx]
-            })
-            .collect::<Vec<_>>();
-
         assert_eq!(e_poly.len(), 1 << log2(e_poly.len()));
         assert_eq!(accesses_i.len(), 1 << log2(accesses_i.len()));
         assert_eq!(values_i.len(), 1 << log2(values_i.len()));
-        span.exit();
 
-        let span = info_span!("final-prod").entered();
         let gamma = (0..self_config.d).map(|_| ctx.challenge()).collect_vec();
 
         let e_in_gamma_eval = evaluate_multivar(&e_poly, &gamma);
@@ -742,7 +741,6 @@ impl<
         let x_tau_values_right_rlc_claim = x_tau_values_leq_r_sumcheck + rlc * x_tau_values_mid_r_sumcheck + rlc2 * x_tau_values_ge_r_sumcheck;
         let y_tau_values_left_rlc_claim = y_tau_values_leq_l_sumcheck + rlc * y_tau_values_mid_l_sumcheck + rlc2 * y_tau_values_ge_l_sumcheck;
         let y_tau_values_right_rlc_claim = y_tau_values_leq_r_sumcheck + rlc * y_tau_values_mid_r_sumcheck + rlc2 * y_tau_values_ge_r_sumcheck;
-        span.exit();
         let rlcf = RLC::new(rlc, 3);
 
         let i_poly_f = i_poly.iter().map(|x| F::from(*x as u64)).collect_vec();
@@ -795,11 +793,12 @@ impl<
         ));
 
         let tau_commitments = commitment_scheme.multi_commit(ctx, vec![
-            x_tau_table_l_rlc.clone(),
-            x_tau_table_r_rlc.clone(),
-            y_tau_table_l_rlc.clone(),
-            y_tau_table_r_rlc.clone(),
-        ], 4);
+            values_i.clone(),
+            x_tau_values_l_rlc.clone(),
+            x_tau_values_r_rlc.clone(),
+            y_tau_values_l_rlc.clone(),
+            y_tau_values_r_rlc.clone(),
+        ], 5);
 
         lookup_advice.push(LookupInput::indexed_by_usize(e_adj, accesses_i.clone(), values_i.clone(), i_poly));
 
@@ -876,24 +875,6 @@ impl<
             - rlc2 * tau::sqrt_decomposition::parts::ge_r(self_config.ny, self_config.py, self_config.midy, &y_tau_right_table_claims.point, r_y)
         ).require();
 
-        commitment_scheme.multi_open(
-            ctx,
-            tau_commitments,
-            vec![
-                x_tau_left_table_claims,
-                x_tau_right_table_claims,
-                y_tau_left_table_claims,
-                y_tau_right_table_claims,
-            ],
-            vec![
-                x_tau_table_l_rlc,
-                x_tau_table_r_rlc,
-                y_tau_table_l_rlc,
-                y_tau_table_r_rlc,
-            ],
-            4
-        );
-
         let reducer = MultiDenseEqSumcheck::new(self_config.h + self_config.d);
 
         let mut claims_mess_1 = reducer
@@ -915,39 +896,62 @@ impl<
                         /* 3  */MultiPointEvalClaimPart::new(2, 1, i_claim.ev),
 
                         /* 4  */MultiPointEvalClaimPart::new(7, 0, x_tau_values_left_rlc_claim),
-                        /* 4  */MultiPointEvalClaimPart::new(3, 2, x_tau_left_index_claims.ev),
-                        /* 5  */MultiPointEvalClaimPart::new(7, 2, x_tau_left_values_claims.ev),
+                        /* 5  */MultiPointEvalClaimPart::new(3, 2, x_tau_left_index_claims.ev),
+                        /* 6  */MultiPointEvalClaimPart::new(7, 2, x_tau_left_values_claims.ev),
 
-                        /* 4  */MultiPointEvalClaimPart::new(8, 0, x_tau_values_right_rlc_claim),
-                        /* 6  */MultiPointEvalClaimPart::new(4, 3, x_tau_right_index_claims.ev),
-                        /* 7  */MultiPointEvalClaimPart::new(8, 3, x_tau_right_values_claims.ev),
+                        /* 7  */MultiPointEvalClaimPart::new(8, 0, x_tau_values_right_rlc_claim),
+                        /* 8  */MultiPointEvalClaimPart::new(4, 3, x_tau_right_index_claims.ev),
+                        /* 9  */MultiPointEvalClaimPart::new(8, 3, x_tau_right_values_claims.ev),
 
-                        /* 4  */MultiPointEvalClaimPart::new(9, 0, y_tau_values_left_rlc_claim),
-                        /* 8  */MultiPointEvalClaimPart::new(5, 4, y_tau_left_index_claims.ev),
-                        /* 9  */MultiPointEvalClaimPart::new(9, 4, y_tau_left_values_claims.ev),
+                        /* 10 */MultiPointEvalClaimPart::new(9, 0, y_tau_values_left_rlc_claim),
+                        /* 11 */MultiPointEvalClaimPart::new(5, 4, y_tau_left_index_claims.ev),
+                        /* 12 */MultiPointEvalClaimPart::new(9, 4, y_tau_left_values_claims.ev),
 
-                        /* 4  */MultiPointEvalClaimPart::new(10, 0, y_tau_values_right_rlc_claim),
-                        /* 10 */MultiPointEvalClaimPart::new(6, 5, y_tau_right_index_claims.ev),
-                        /* 11 */MultiPointEvalClaimPart::new(10, 5, y_tau_right_values_claims.ev),
+                        /* 13 */MultiPointEvalClaimPart::new(10, 0, y_tau_values_right_rlc_claim),
+                        /* 14 */MultiPointEvalClaimPart::new(6, 5, y_tau_right_index_claims.ev),
+                        /* 15 */MultiPointEvalClaimPart::new(10, 5, y_tau_right_values_claims.ev),
                     ],
                 ),
                 vec![
-                    /* 0  */values_i,
+                    /* 0  */values_i.clone(),
                     /* 1  */c_poly,
                     /* 2  */i_poly_f,
                     /* 3  */x_tau_indexes_l,
                     /* 4  */x_tau_indexes_r,
                     /* 5  */y_tau_indexes_l,
                     /* 6  */y_tau_indexes_r,
-                    /* 7  */x_tau_values_l_rlc,
-                    /* 8  */x_tau_values_r_rlc,
-                    /* 9  */y_tau_values_l_rlc,
-                    /* 10 */y_tau_values_r_rlc,
+                    /* 7  */x_tau_values_l_rlc.clone(),
+                    /* 8  */x_tau_values_r_rlc.clone(),
+                    /* 9  */y_tau_values_l_rlc.clone(),
+                    /* 10 */y_tau_values_r_rlc.clone(),
                 ],
             )
             .0;
-
         (claims_mess_1.evs[1] - claims_mess_1.evs[2]).require();
+        (claims_mess_1.evs[4] - claims_mess_1.evs[6]).require();
+        (claims_mess_1.evs[7] - claims_mess_1.evs[9]).require();
+        (claims_mess_1.evs[10] - claims_mess_1.evs[12]).require();
+        (claims_mess_1.evs[13] - claims_mess_1.evs[15]).require();
+
+        commitment_scheme.multi_open(
+            ctx,
+            tau_commitments,
+            vec![
+                EvalClaim{ ev: claims_mess_1.evs[1], point: claims_mess_1.point.clone() },
+                EvalClaim{ ev: claims_mess_1.evs[4], point: claims_mess_1.point.clone() },
+                EvalClaim{ ev: claims_mess_1.evs[7], point: claims_mess_1.point.clone() },
+                EvalClaim{ ev: claims_mess_1.evs[10], point: claims_mess_1.point.clone() },
+                EvalClaim{ ev: claims_mess_1.evs[13], point: claims_mess_1.point.clone() },
+            ],
+            vec![
+                values_i,
+                x_tau_values_l_rlc,
+                x_tau_values_r_rlc,
+                y_tau_values_l_rlc,
+                y_tau_values_r_rlc,
+            ],
+            5
+        );
 
         let reducer2 = MultiDenseEqSumcheck::new(self_config.d);
 
@@ -973,12 +977,19 @@ impl<
                         MultiPointEvalClaimPart::new(1, 3, i_acc.ev),
                     ],
                 ),
-                vec![e_poly, accesses_i],
+                vec![e_poly.clone(), accesses_i],
             )
             .0;
 
         (claims_mess_2.evs[0] - claims_mess_2.evs[1]).require();
         (claims_mess_2.evs[0] - claims_mess_2.evs[2]).require();
+
+        commitment_scheme.open(
+            ctx,
+            e_poly_commitment,
+            EvalClaim{ ev: claims_mess_2.evs[0], point: claims_mess_2.point.clone() },
+            e_poly,
+        );
 
         let x_accesses_claims = [
             x_tau_left_accesses_claims,
@@ -989,6 +1000,21 @@ impl<
             y_tau_left_accesses_claims,
             y_tau_right_accesses_claims,
         ];
+
+
+
+        let claims_mess_1 = SinglePointClaims {
+            evs: vec![
+                claims_mess_1.evs[1],
+                claims_mess_1.evs[0],
+                claims_mess_1.evs[3],
+                claims_mess_1.evs[5],
+                claims_mess_1.evs[8],
+                claims_mess_1.evs[11],
+                claims_mess_1.evs[12],
+            ],
+            point: claims_mess_1.point,
+        };
 
         // All these claims should be returned.
         // This is a mess. there are actually like 12 of them.
@@ -1075,7 +1101,7 @@ pub mod bench_parts {
     >(vspark: &VsparkProver<F, CommEngine>, input: VsparkTestcaseData<F>)
     where
         <F as TSigUtil>::Constants: From<u64>,
-        CommEngine::Verifier: TCommitmentEngineVerifier<F, MultiConfig=usize, MultiClaim=Vec<EvalClaim<F>>>
+        CommEngine::Verifier: TCommitmentEngineVerifier<F, MultiConfig=usize, MultiClaim=Vec<EvalClaim<F>>, Claim=EvalClaim<F>>
     {
         let span = info_span!("sqrt").entered();
         let mut transcript_p = ProofTranscript::start_prover("asd".as_bytes());

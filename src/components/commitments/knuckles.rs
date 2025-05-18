@@ -157,11 +157,12 @@ impl<Ctx: Pairing> KnucklesProvingKey<Ctx> {
     /// Returns polynomial T and an opening c, such that T(kx) - k^{N-1}T(x) + c = P(x)E_r(x)
     /// This equation then can be checked by normal KZG means.
     pub fn compute_t(&self, poly: &[Ctx::ScalarField], point: &[Ctx::ScalarField]) -> (Vec<Ctx::ScalarField>, Ctx::ScalarField) {
-        assert_eq!(point.len(), self.num_vars);
+        assert!(point.len() <= self.num_vars);
+        let num_vars = point.len();
 
         let mut pt = point.to_vec();
 
-        let n = 1 << self.num_vars;
+        let n = 1 << num_vars;
         assert!(poly.len() <= n);
 
         let mut t: Vec<Ctx::ScalarField> = Vec::with_capacity(2 * n - 1);
@@ -173,7 +174,7 @@ impl<Ctx: Pairing> KnucklesProvingKey<Ctx> {
         t.extend(poly.iter().map(|x| *x).chain(std::iter::repeat(Ctx::ScalarField::zero())).take(2 * n - 1));
 
         let mut curr_size = n; // This will hold the size of our data
-        for i in 0..self.num_vars {
+        for i in 0..num_vars {
             t_scaled[0..curr_size]
                 .par_iter_mut()
                 .enumerate()
@@ -276,6 +277,9 @@ impl<Ctx: Pairing> KnucklesVerifyingKey<Ctx> {
         claimed_opening: Ctx::ScalarField,
         transcript: &mut Transcript,
     ) -> (Ctx::G1, Ctx::G1) {
+        let num_vars = point.len();
+        assert!(num_vars <= self.num_vars);
+
         let t_comm: Ctx::G1 = transcript.read();
         let x: Ctx::ScalarField = transcript.challenge();
 
@@ -300,7 +304,7 @@ impl<Ctx: Pairing> KnucklesVerifyingKey<Ctx> {
         let k_pow_n_1 = self.k.pow([(1 << self.num_vars) - 1]); // Can  be precomputed if necessary.
 
         let mut xpow = x;
-        let eq_ev = (0..self.num_vars).map(|i| {
+        let eq_ev = (0..num_vars).map(|i| {
             let r = point[i];
             let ret = r + (Ctx::ScalarField::one() - r) * xpow;
             xpow *= xpow;
@@ -314,7 +318,7 @@ impl<Ctx: Pairing> KnucklesVerifyingKey<Ctx> {
         let rhs = x * p_x * eq_ev; // x * P(x) Eq_point (x)
 
 
-        assert!(lhs == rhs);
+        assert_eq!(lhs, rhs, "lhs == rhs");
 
         let fin: Ctx::ScalarField = transcript.challenge();
 
@@ -367,30 +371,34 @@ mod tests {
         let kzg_pk : KzgProvingKey<Ctx>  = random_kzg_pk(2*N - 1, rng);
         let knuckles_pk = KnucklesProvingKey::new(kzg_pk, num_vars, k);
 
-        let poly : Vec<_> = repeat_with(||Fr::rand(rng)).take(1 << num_vars).collect();
-        let point : Vec<_> = repeat_with(||Fr::rand(rng)).take(num_vars).collect();
+        for num_vars_offset in 0..num_vars - 1 {
+            let num_vars = num_vars - num_vars_offset;
 
-        let (t, opening) = knuckles_pk.compute_t(&poly, &point);
+            let poly: Vec<_> = repeat_with(|| Fr::rand(rng)).take(1 << num_vars).collect();
+            let point: Vec<_> = repeat_with(|| Fr::rand(rng)).take(num_vars).collect();
 
-        assert_eq!(evaluate_multivar(&poly, &point), opening, "evaluate_multivar(&poly, &point) == opening"); // Check that opening is correct.
+            let (t, opening) = knuckles_pk.compute_t(&poly, &point);
 
-        let eval_claim = EvalClaim {
-            ev: opening,
-            point,
-        };
+            assert_eq!(evaluate_multivar(&poly, &point), opening, "evaluate_multivar(&poly, &point) == opening"); // Check that opening is correct.
 
-        let mut p_transcript = ProofTranscript::start_prover(b"test knuckles");
+            let eval_claim = EvalClaim {
+                ev: opening,
+                point,
+            };
 
-        let commitment = knuckles_pk.commit(&mut p_transcript, poly.clone());
-        p_transcript.write(&Fr::from(10)); // some padding so commit and open are separated.
-        knuckles_pk.open(&mut p_transcript, commitment, eval_claim.clone(), poly);
-        let proof = p_transcript.end();
+            let mut p_transcript = ProofTranscript::start_prover(b"test knuckles");
 
-        let knuckles_vk = knuckles_pk.verifying_key();
-        let mut v_transcript = ProofTranscript::start_verifier(b"test knuckles", proof);
+            let commitment = knuckles_pk.commit(&mut p_transcript, poly.clone());
+            p_transcript.write(&Fr::from(10)); // some padding so commit and open are separated.
+            knuckles_pk.open(&mut p_transcript, commitment, eval_claim.clone(), poly);
+            let proof = p_transcript.end();
 
-        let commitment = knuckles_vk.commit(&mut v_transcript);
-        assert_eq!(v_transcript.read::<Fr>(), Fr::from(10), "Checking padding");
-        knuckles_vk.open(&mut v_transcript, commitment, eval_claim);
+            let knuckles_vk = knuckles_pk.verifying_key();
+            let mut v_transcript = ProofTranscript::start_verifier(b"test knuckles", proof);
+
+            let commitment = knuckles_vk.commit(&mut v_transcript);
+            assert_eq!(v_transcript.read::<Fr>(), Fr::from(10), "Checking padding");
+            knuckles_vk.open(&mut v_transcript, commitment, eval_claim);
+        }
     }
 }

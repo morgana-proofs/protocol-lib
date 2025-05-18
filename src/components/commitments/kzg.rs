@@ -293,7 +293,7 @@ mod tests {
     #[test]
     fn poly_open() {
         let rng = &mut test_rng();
-        let poly = random_poly(97, rng);
+        let poly = random_poly(57, rng);
         let srs : KzgProvingKey<Ctx> = random_kzg_pk(128, rng);
         let vkey = srs.verifying_key().opening();
 
