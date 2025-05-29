@@ -8,7 +8,7 @@ use crate::common::claims::{EvalClaim, SinglePointClaims, SumClaim};
 use crate::common::math::{eq_poly, evaluate_multivar};
 use crate::common::wrapper::{ComputationalField, TFelt, TSigUtil};
 use crate::components::sumcheck::dense_eq::{eq_eval, DenseSumcheckableSO};
-use crate::components::sumcheck::generic::{SumcheckGenericProverImpl, SumcheckProtocol};
+use crate::components::sumcheck::generic::{SumcheckGenericProverImpl, SumcheckOutput, SumcheckProtocol};
 use crate::transcript::transcript::TArithmeticTranscript;
 use crate::protocol::component::{TProtocol, TProverImpl};
 
@@ -121,7 +121,7 @@ impl <F: TFelt, Transcript: TArithmeticTranscript<F>> TProtocol<Transcript> for 
 
         let generic_protocol_config = SumcheckProtocol::new(f.clone(), self.num_vars);
 
-        let EvalClaim{ ev, point: output_point } = generic_protocol_config.verify(ctx, SumClaim(folded_claim));
+        let EvalClaim{ ev, point: output_point } = generic_protocol_config.verify(ctx, SumClaim(folded_claim).into());
 
         let poly_evs = (0..f.n_ins() - evals.len()).map(|_| ctx.read()).collect_vec();
 
@@ -206,12 +206,13 @@ impl<F: ComputationalField, Transcript: TArithmeticTranscript<F>> TProverImpl<Tr
 
         let (
             EvalClaim{point: output_point, ev},
-            mut poly_evs,
+            poly_evs,
         ) = generic_protocol_config.prove(
             ctx,
-            SumClaim(so.claim),
+            SumClaim(so.claim).into(),
             so,
         );
+        let SumcheckOutput::Final(mut poly_evs) = poly_evs else {unreachable!()};
 
         assert_eq!(
             ev,
@@ -230,7 +231,6 @@ impl<F: ComputationalField, Transcript: TArithmeticTranscript<F>> TProverImpl<Tr
             }
             poly_evs.remove(i);
         }
-
 
         (SinglePointClaims {
             point: output_point,

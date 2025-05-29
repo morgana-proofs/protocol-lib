@@ -135,7 +135,7 @@ impl<F: TFelt, Transcript: TArithmeticTranscript<F>> TProtocol<Transcript> for V
 
         let sumcheck = DenseSumcheck::new(f, self.h + self.d);
 
-        let e_claim_sumcheck: SinglePointClaims<F> = sumcheck.verify(ctx, SumClaim(e_in_gamma_eval));
+        let e_claim_sumcheck: SinglePointClaims<F> = sumcheck.verify(ctx, SumClaim(e_in_gamma_eval).into());
         let [c_ev_sumcheck, i_pull_ev_sumcheck, x_pull_ev_sumcheck, y_pull_ev_sumcheck, eq_ev_sumcheck] = e_claim_sumcheck.evs.try_into().unwrap();
         (eq_ev_sumcheck - eq_eval(&gamma, &e_claim_sumcheck.point[self.h..])).require();
 
@@ -314,7 +314,7 @@ impl<F: ComputationalField, Transcript: TArithmeticTranscript<F>> TProverImpl<Tr
         let sumcheck = DenseSumcheck::new(f, self.h + self.d);
         span.exit();
 
-        let e_claim_sumcheck: SinglePointClaims<F> = sumcheck.prove(ctx, SumClaim(e_in_gamma_eval), e_data).0;
+        let e_claim_sumcheck: SinglePointClaims<F> = sumcheck.prove(ctx, SumClaim(e_in_gamma_eval).into(), e_data).0;
 
         let [c_ev_sumcheck, i_pull_ev_sumcheck, x_pull_ev_sumcheck, y_pull_ev_sumcheck, eq_ev_sumcheck] = e_claim_sumcheck.evs.try_into().unwrap();
         (eq_ev_sumcheck - eq_eval(&gamma, &e_claim_sumcheck.point[self.h..])).require();

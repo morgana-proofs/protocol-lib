@@ -1,5 +1,6 @@
 use std::marker::PhantomData;
 use std::ops::Index;
+use itertools::Itertools;
 use crate::common::algfn::{AlgFn, AlgFnSO};
 use crate::common::wrapper::TFelt;
 
@@ -66,6 +67,131 @@ impl <F: TFelt, Fun: AlgFn<F>> AlgFnSO<F> for GammaWrapper<F, Fun> {
 
     fn n_ins(&self) -> usize {
         self.f.n_ins()
+    }
+}
+
+struct OffsetIndexer<'a, F: TFelt, T: Index<usize, Output=F>> {
+    index: &'a T,
+    offset: usize,
+}
+
+impl<'a, F: TFelt, T: Index<usize, Output=F>> OffsetIndexer<'a, F, T> {
+    fn new(index: &'a T, offset: usize) -> Self {
+        Self { offset, index }
+    }
+}
+
+impl<'a, F: TFelt, T: Index<usize, Output=F>> Index<usize> for OffsetIndexer<'a, F, T> {
+    type Output = F;
+
+    fn index(&self, index: usize) -> &Self::Output {
+        self.index.index(index + self.offset)
+    }
+}
+
+
+#[derive(Clone)]
+pub struct RepeatedAlgFn<F: TFelt, Fun: AlgFn<F>> {
+    fun: Fun,
+    count: usize,
+    _pd: PhantomData<F>
+}
+
+impl<F: TFelt, Fun: AlgFn<F>> RepeatedAlgFn<F, Fun> {
+    pub fn new(fun: Fun, count: usize) -> Self {
+        Self { fun, count, _pd: Default::default() }
+    }
+}
+
+impl<F: TFelt, Fun: AlgFn<F>> AlgFn<F> for RepeatedAlgFn<F, Fun> {
+    fn exec(&self, args: &impl Index<usize, Output=F>) -> impl Iterator<Item=F> {
+        (0..self.count)
+            .map(|i|
+                self.fun.exec(&OffsetIndexer::new(args, i * self.fun.n_ins())).collect_vec()
+            )
+            .flatten()
+    }
+
+    fn deg(&self) -> usize {
+        self.fun.deg()
+    }
+
+    fn n_ins(&self) -> usize {
+        self.fun.n_ins() * self.count
+    }
+
+    fn n_outs(&self) -> usize {
+        self.fun.n_outs() * self.count
+    }
+}
+
+#[derive(Clone)]
+pub struct StackedAlgFn<F: TFelt, Fun1: AlgFn<F>, Fun2: AlgFn<F>> {
+    fun1: Fun1,
+    fun2: Fun2,
+    _pd: PhantomData<F>
+}
+
+impl<F: TFelt, Fun1: AlgFn<F>, Fun2: AlgFn<F>> StackedAlgFn<F, Fun1, Fun2> {
+    pub fn new(fun1: Fun1, fun2: Fun2) -> Self {
+        Self { fun1, fun2, _pd: Default::default() }
+    }
+}
+impl<F: TFelt, Fun1: AlgFn<F>, Fun2: AlgFn<F>> AlgFn<F> for StackedAlgFn<F, Fun1, Fun2> {
+    fn exec(&self, args: &impl Index<usize, Output=F>) -> impl Iterator<Item=F> {
+        self.fun1.exec(args).chain(self.fun2.exec(&OffsetIndexer::new(args, self.fun1.n_ins())).collect_vec().into_iter())
+    }
+
+    fn deg(&self) -> usize {
+        self.fun1.deg().max(self.fun2.deg())
+    }
+
+    fn n_ins(&self) -> usize {
+        self.fun1.n_ins() + self.fun2.n_ins()
+    }
+
+    fn n_outs(&self) -> usize {
+        self.fun1.n_outs() + self.fun2.n_outs()
+    }
+}
+
+#[derive(Clone)]
+pub struct RLCAlgFn<F: TFelt, Fun: AlgFnSO<F>> {
+    f: Fun,
+    pub size: usize,
+    pub coeffs: Vec<F>,
+}
+
+impl<F: TFelt, Fun: AlgFnSO<F>> RLCAlgFn<F, Fun> {
+    pub fn new(f: Fun) -> Self {
+        Self {
+            f,
+            size: 1,
+            coeffs: vec![],
+        }
+    }
+
+    pub fn extend(&mut self, coeff: F) {
+        self.size += 1;
+        self.coeffs.push(coeff);
+    }
+}
+
+impl<F: TFelt, Fun: AlgFnSO<F>> AlgFnSO<F> for RLCAlgFn<F, Fun> {
+    fn exec(&self, args: &impl Index<usize, Output=F>) -> F {
+        let mut val = self.f.exec(&OffsetIndexer::new(args, 0));
+        for (i, coeff) in self.coeffs.iter().enumerate() {
+            val += self.f.exec(&OffsetIndexer::new(args, self.f.n_ins() * (i + 1))) * coeff;
+        }
+        val
+    }
+
+    fn deg(&self) -> usize {
+        self.f.deg()
+    }
+
+    fn n_ins(&self) -> usize {
+        self.f.n_ins() * self.size
     }
 }
 

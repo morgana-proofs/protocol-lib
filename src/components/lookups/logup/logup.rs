@@ -511,7 +511,8 @@ impl<F: ComputationalField, Transcript: TArithmeticTranscript<F>> TProverImpl<Tr
                     ]
                 }
             }
-        }).flatten().collect_vec();
+        })
+            .flatten().collect_vec();
 
         let mainphase = LogupMainphase::new(self.lookups.iter().map(|lt| match lt {
             LookupType::Indexed(table, lookup) => {

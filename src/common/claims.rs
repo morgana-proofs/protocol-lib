@@ -52,3 +52,29 @@ pub struct SinglePointClaims<F> {
     pub evs: Vec<F>,
     pub point: Vec<F>,
 }
+
+impl<F> From<SinglePointClaims<F>> for EvalClaim<F> {
+    fn from(mut claims: SinglePointClaims<F>) -> Self {
+        assert!(claims.evs.len() == 1);
+        EvalClaim{ ev: claims.evs.pop().unwrap(), point: claims.point }
+    }
+}
+
+impl<F> From<EvalClaim<F>> for SinglePointClaims<F> {
+    fn from(claim: EvalClaim<F>) -> Self {
+        SinglePointClaims{ evs: vec![claim.ev], point: claim.point }
+    }
+}
+
+impl<F> From<EvalClaim<F>> for SumClaim<F> {
+    fn from(claim: EvalClaim<F>) -> Self {
+        assert!(claim.point.len() == 0);
+        SumClaim(claim.ev)
+    }
+}
+
+impl<F> From<SumClaim<F>> for EvalClaim<F> {
+    fn from(claim: SumClaim<F>) -> Self {
+        EvalClaim{ ev: claim.0, point: vec![] }
+    }
+}

@@ -174,7 +174,7 @@ impl<
         let sumcheck = DenseSumcheck::new(f, self_config.h + self_config.d);
 
         let e_claim_sumcheck: SinglePointClaims<F> = sumcheck
-            .verify(ctx, SumClaim(e_in_gamma_eval));
+            .verify(ctx, SumClaim(e_in_gamma_eval).into());
 
         let [
         c_ev_sumcheck,
@@ -607,7 +607,7 @@ impl<
         let sumcheck = DenseSumcheck::new(f, self_config.h + self_config.d);
 
         let e_claim_sumcheck: SinglePointClaims<F> = sumcheck
-            .prove(ctx, SumClaim(e_in_gamma_eval), e_data)
+            .prove(ctx, SumClaim(e_in_gamma_eval).into(), e_data)
             .0;
 
         let [
