@@ -3,7 +3,7 @@ use itertools::Itertools;
 use tracing::instrument;
 use crate::common::algfn::AlgFnSO;
 use crate::common::claims::{EvalClaim, SinglePointClaims, SumClaim};
-use crate::common::wrapper::{ComputationalField, TFelt};
+use crate::common::wrapper::{ComputationalField, TFelt, TSigUtil};
 use crate::components::sumcheck::dense_eq::DenseSumcheckableSO;
 use crate::components::sumcheck::generic::{SumcheckGenericProverImpl, SumcheckProtocol};
 use crate::transcript::transcript::TArithmeticTranscript;
@@ -37,7 +37,7 @@ impl<F: TFelt, Fun: AlgFnSO<F>, Transcript: TArithmeticTranscript<F>> TProtocol<
     }
 }
 
-impl<F: ComputationalField, Fun: AlgFnSO<F>, Transcript: TArithmeticTranscript<F>> TProverImpl<Transcript> for DenseSumcheck<F, Fun> {
+impl<F: ComputationalField, Fun: AlgFnSO<F>, Transcript: TArithmeticTranscript<F>> TProverImpl<Transcript> for DenseSumcheck<F, Fun> where <F as TSigUtil>::Constants: From<u64>  {
     type Verifier = Self;
     type ProverInput = Vec<Vec<F>>;
     type ProverOutput = ();
@@ -61,11 +61,12 @@ impl<F: ComputationalField, Fun: AlgFnSO<F>, Transcript: TArithmeticTranscript<F
 mod tests {
     use std::ops::Index;
     use super::*;
-    use crate::{common::wrapper::TFeltUtil, transcript::transcript::tests::ManualTestTranscript};
+    use crate::common::wrapper::TFeltUtil;
     use ark_bn254::Fq as F;
     use ark_std::{test_rng, UniformRand};
     //use num_traits::One;
     use crate::common::math::evaluate_multivar;
+    use crate::transcript::transcript::ProofTranscript;
 
     #[derive(Clone, Copy)]
     pub struct TestFunction {}
@@ -99,13 +100,13 @@ mod tests {
             output.push(f.exec(&args));
         }
 
-        let mut transcript_p = ManualTestTranscript::new((0..1000).map(|_| F::rand(rng)).collect_vec());
+        let mut transcript_p = ProofTranscript::start_prover(b"test");
 
         let claim = SumClaim(output.iter().sum());
         let sumcheck = DenseSumcheck::new(f, logsize);
         let (output_claims, _) = sumcheck.prove(&mut transcript_p, claim.clone(), polys.clone());
-        let _proof = transcript_p.end();
-        let mut transcript_v = transcript_p;
+        let proof = transcript_p.end();
+        let mut transcript_v = ProofTranscript::start_verifier(b"test", proof);
 
         let expected_output_claims = sumcheck.verify(&mut transcript_v, claim);
         assert_eq!(output_claims, expected_output_claims);

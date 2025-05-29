@@ -179,11 +179,11 @@ pub mod tau {
     pub mod no_decomposition {
         use itertools::Itertools;
         use tracing::instrument;
-        use crate::common::wrapper::{ComputationalField, TFelt, TFeltUtil};
+        use crate::common::wrapper::{ComputationalField, TFelt, TFeltUtil, TSigUtil};
         use crate::components::sumcheck::dense_eq::{eq_eval, eq_eval_single};
         use crate::components::vspark::matrix::{assert_r_size, extend_r, hybrid_eq_eval, point_from_usize, AdmSubset};
 
-        pub fn for_subset<F: ComputationalField>(n: usize, s: AdmSubset, r: &[F]) -> F {
+        pub fn for_subset<F: ComputationalField>(n: usize, s: AdmSubset, r: &[F]) -> F where <F as TSigUtil>::Constants: From<u64>  {
             let mut partial =  F::one();
             if s.k == 0 {
                 partial = r[0].static_pow(&[s.u as u64]);
@@ -198,7 +198,7 @@ pub mod tau {
         }
 
         #[instrument(level = "debug", skip_all)]
-        pub fn table<F: ComputationalField>(n: usize, p: usize, r: &[F]) -> Vec<F> {
+        pub fn table<F: ComputationalField>(n: usize, p: usize, r: &[F]) -> Vec<F> where <F as TSigUtil>::Constants: From<u64>  {
             assert_r_size(n, p, r);
             (0usize..(1 << (n + 2)))
                 .map(|i|
@@ -434,7 +434,7 @@ pub mod tau {
                 use ark_std::{test_rng, UniformRand};
                 use itertools::Itertools;
                 use crate::common::math::evaluate_multivar;
-                use crate::common::wrapper::TFeltUtil;
+                use crate::common::wrapper::{TFeltUtil, TSigUtil};
                 use crate::components::vspark::matrix::r_size;
                 use crate::components::vspark::matrix::tau::sqrt_decomposition::parts;
 
@@ -592,7 +592,7 @@ pub mod tau {
             use ark_bn254::Fq as F;
             use ark_std::{test_rng, UniformRand};
             use itertools::Itertools;
-            use crate::common::wrapper::TFeltUtil;
+            use crate::common::wrapper::{TFeltUtil, TSigUtil};
             use crate::components::vspark::matrix::{r_size, AdmSubset};
             use crate::components::vspark::matrix::tau::no_decomposition;
             use crate::components::vspark::matrix::tau::sqrt_decomposition;
@@ -1128,7 +1128,7 @@ mod tests {
     use itertools::{assert_equal, repeat_n};
     use crate::common::algfn::AlgFnSO;
     use crate::common::math::{evaluate_multivar, evaluate_univar};
-    use crate::common::wrapper::TFeltUtil;
+    use crate::common::wrapper::{TFeltUtil, TSigUtil};
     use crate::components::vspark::vspark::VsparkFinalProd;
 
     #[test]
@@ -1347,7 +1347,7 @@ mod tests {
         for ((a, b), tag) in err.1.iter().zip(err.2.iter()) {
             println!("err val: {} {} {}", tag, a, b);
         }
-        assert_eq!(err.0, vec![]);
+        assert_eq!(0, err.0.len());
 
         let rng = &mut test_rng();
         let tbl = tau::no_decomposition::table(n, p, &r);

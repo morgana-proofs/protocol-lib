@@ -1,10 +1,10 @@
 use std::iter::{once, repeat};
 use itertools::Itertools;
 use rayon::prelude::*;
-use super::wrapper::{ComputationalField, TFelt};
+use super::wrapper::{ComputationalField, TFelt, TSigUtil};
 
 /// Computes polynomial coefficients from values in points 0, 1, 2, ..., n
-pub fn from_evals<F: ComputationalField>(evals: &[F]) -> Vec<F> {
+pub fn from_evals<F: ComputationalField>(evals: &[F]) -> Vec<F> where <F as TSigUtil>::Constants: From<u64> {
     vandermonde_interpolation(evals)
 }
 
@@ -39,7 +39,7 @@ pub fn bind_dense_poly<F: TFelt>(poly: &mut Vec<F>, t: F) {
 }
 // Vandermonde interpolation shamelessly stolen from liblasso.
 
-pub fn vandermonde_interpolation<F: ComputationalField>(evals: &[F]) -> Vec<F> {
+pub fn vandermonde_interpolation<F: ComputationalField>(evals: &[F]) -> Vec<F> where <F as TSigUtil>::Constants: From<u64> {
     let n = evals.len();
     let xs: Vec<F> = (0..n).map(|x| F::from_const(x as u64)).collect();
 

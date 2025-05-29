@@ -7,7 +7,7 @@ use tracing::instrument;
 use crate::common::algfn::{AlgFn, AlgFnSO};
 use crate::common::claims::{EvalClaim, SinglePointClaims, SumClaim};
 use crate::common::math::{bind_dense_poly, eq_poly, evaluate_univar, from_evals};
-use crate::common::wrapper::{ComputationalField, TFelt};
+use crate::common::wrapper::{ComputationalField, TFelt, TSigUtil};
 use crate::components::sumcheck::algfn_wrappers::{EqWrapper, GammaWrapper};
 use crate::components::sumcheck::generic::{SumcheckGenericProverImpl, SumcheckProtocol};
 use crate::components::sumcheck::sumcheckable::{FoldToSumcheckable, Sumcheckable};
@@ -17,7 +17,7 @@ use crate::protocol::component::{TProtocol, TProverImpl};
 
 
 #[derive(Clone, Debug)]
-pub struct DenseSumcheckableSO<F: ComputationalField, Fun: AlgFnSO<F>> {
+pub struct DenseSumcheckableSO<F: ComputationalField, Fun: AlgFnSO<F>> where <F as TSigUtil>::Constants: From<u64>  {
     pub polys: Vec<Vec<F>>,
     challenges: Vec<F>,
     f: Fun,
@@ -28,7 +28,7 @@ pub struct DenseSumcheckableSO<F: ComputationalField, Fun: AlgFnSO<F>> {
     pub claim: F,
 }
 
-impl<F: ComputationalField, Fun: AlgFnSO<F>> DenseSumcheckableSO<F, Fun> {
+impl<F: ComputationalField, Fun: AlgFnSO<F>> DenseSumcheckableSO<F, Fun> where <F as TSigUtil>::Constants: From<u64>  {
     pub fn new(polys: Vec<Vec<F>>, f: Fun, num_vars: usize, claim_hint: F) -> Self {
         let l = polys.len();
         assert_eq!(l, f.n_ins());
@@ -39,7 +39,7 @@ impl<F: ComputationalField, Fun: AlgFnSO<F>> DenseSumcheckableSO<F, Fun> {
     }
 }
 
-impl<F: ComputationalField, Fun: AlgFnSO<F>> Sumcheckable<F> for DenseSumcheckableSO<F, Fun> {
+impl<F: ComputationalField, Fun: AlgFnSO<F>> Sumcheckable<F> for DenseSumcheckableSO<F, Fun> where <F as TSigUtil>::Constants: From<u64>  {
     fn bind(&mut self, t: F) {
         assert!(self.round_idx < self.num_vars, "the protocol has already ended");
         self.challenges.push(t);
@@ -53,7 +53,7 @@ impl<F: ComputationalField, Fun: AlgFnSO<F>> Sumcheckable<F> for DenseSumcheckab
         }
     }
 
-    fn unipoly(&mut self) -> Vec<F> {
+    fn unipoly(&mut self) -> Vec<F>{
         assert!(self.round_idx < self.num_vars, "the protocol has already ended");
 
         match self.cached_unipoly.as_ref() {
@@ -137,7 +137,7 @@ impl<F: TFelt, Fun: AlgFn<F>> DenseEqSumcheckable<F, Fun> {
     }
 }
 
-impl<F: ComputationalField, Fun: AlgFn<F>> FoldToSumcheckable<F> for DenseEqSumcheckable<F, Fun> {
+impl<F: ComputationalField, Fun: AlgFn<F>> FoldToSumcheckable<F> for DenseEqSumcheckable<F, Fun> where <F as TSigUtil>::Constants: From<u64>  {
     type Target = DenseSumcheckableSO<F, EqWrapper<F, GammaWrapper<F, Fun>>>; // to be replaced
 
     fn rlc(self, gamma: F) -> Self::Target {
@@ -217,7 +217,7 @@ impl <F: TFelt, Fun: AlgFn<F>, Transcript: TArithmeticTranscript<F>> TProtocol<T
 }
 
 
-impl<F: ComputationalField, Fun: AlgFn<F>, Transcript: TArithmeticTranscript<F>> TProverImpl<Transcript> for DenseEqSumcheck<F, Fun> {
+impl<F: ComputationalField, Fun: AlgFn<F>, Transcript: TArithmeticTranscript<F>> TProverImpl<Transcript> for DenseEqSumcheck<F, Fun> where <F as TSigUtil>::Constants: From<u64>  {
     type Verifier = Self;
     type ProverInput = Vec<Vec<F>>;
     type ProverOutput = ();
@@ -260,12 +260,12 @@ impl<F: ComputationalField, Fun: AlgFn<F>, Transcript: TArithmeticTranscript<F>>
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::transcript::transcript::tests::ManualTestTranscript;
     use ark_bn254::Fq as F;
     use ark_ff::Field;
     use ark_std::{test_rng, UniformRand};
     use num_traits::{One, Zero};
     use crate::common::math::evaluate_multivar;
+    use crate::transcript::transcript::ProofTranscript;
 
     #[derive(Clone, Copy)]
     pub struct TestFunction {}
@@ -304,7 +304,7 @@ mod tests {
             f.exec(&args).zip(output.iter_mut()).map(|(ret, output)| output.push(ret)).count();
         }
 
-        let mut transcript_p = ManualTestTranscript::new((0..1000).map(|_| F::rand(rng)).collect_vec());
+        let mut transcript_p = ProofTranscript::start_prover(b"test");
 
         let ev_claims : Vec<F> = output.iter().map(|output| evaluate_multivar(output, &point)).collect();
 
@@ -316,7 +316,7 @@ mod tests {
 
         let proof = transcript_p.end();
 
-        let mut transcript_v = transcript_p;
+        let mut transcript_v = ProofTranscript::start_verifier(b"test", proof);
 
         let expected_output_claims = sumcheck.verify(&mut transcript_v, ev_claims);
 

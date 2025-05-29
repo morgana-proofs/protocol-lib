@@ -1,30 +1,35 @@
 use std::fmt::Debug;
 use std::iter::Sum;
 use std::ops::{Add, AddAssign, Div, DivAssign, Mul, MulAssign, Neg, Sub, SubAssign};
-
+use ark_ec::CurveGroup;
 use ark_ff::{BigInteger, PrimeField};
 use ark_serialize::{CanonicalDeserialize, CanonicalSerialize};
+use num_traits::Zero;
 use serde::{Deserialize, Serialize};
 
-pub trait ComputationalField: TFelt + From<u64> + CanonicalSerialize + CanonicalDeserialize + Send + Sync + PartialEq + Eq + ComputationalFieldSerialisation {}
-impl<T: TFelt + From<u64> + CanonicalSerialize + CanonicalDeserialize + Send + Sync + PartialEq + Eq + ComputationalFieldSerialisation> ComputationalField for T {}
+pub trait ComputationalField: TFelt + From<u64> + CanonicalSerialize + CanonicalDeserialize + Send + Sync + PartialEq + Eq + IOSerialisation + ChallengeSerialisation {}
+impl<T: TFelt + From<u64> + CanonicalSerialize + CanonicalDeserialize + Send + Sync + PartialEq + Eq + IOSerialisation + ChallengeSerialisation> ComputationalField for T {}
 
-pub trait TFeltUtil : Sized {
-    type Constants : ComputationalField;
+pub trait TSigUtil: Sized {
+    type Constants : Into<Self>;
     fn from_const(value: impl Into<Self::Constants>) -> Self;
-    fn static_pow(&self, exp: &[u64]) -> Self;
     /// Asserts that value is zero.
     fn require(&self);
     fn zero() -> Self;
+}
+pub trait TFeltUtil : Sized + TSigUtil {
+    fn static_pow(&self, exp: &[u64]) -> Self;
     fn one() -> Self;
 }
 
-pub trait ComputationalFieldSerialisation: Sized + CanonicalSerialize + CanonicalDeserialize {
-    const CHALLENGE_BYTES: usize;
+pub trait IOSerialisation: Sized + CanonicalSerialize + CanonicalDeserialize + Default {
     fn num_bytes() -> usize;
-    fn deserialize_challenge(reader: &[u8]) -> Self;
     fn deserialize(reader: &[u8]) -> Self;
     fn serialize(&self, writer: &mut Vec<u8>);
+}
+pub trait ChallengeSerialisation: Sized{
+    const CHALLENGE_BYTES: usize;
+    fn deserialize_challenge(reader: &[u8]) -> Self;
 }
 
 pub trait TFelt:
@@ -113,16 +118,9 @@ impl<U: PrimeField> Invert for U {
         self.inverse().unwrap()
     }
 }
-impl<U: PrimeField> ComputationalFieldSerialisation for U {
-    const CHALLENGE_BYTES: usize = U::BigInt::NUM_LIMBS * 8;
-
+impl<U: Sized + CanonicalSerialize + CanonicalDeserialize + Default> IOSerialisation for U {
     fn num_bytes() -> usize {
-        U::compressed_size(&U::zero())
-    }
-
-    fn deserialize_challenge(reader: &[u8]) -> Self {
-        assert_eq!(reader.len(), Self::CHALLENGE_BYTES, "wrong challenge bytelen");
-        U::from_le_bytes_mod_order(&reader)
+        U::compressed_size(&U::default())
     }
 
     fn deserialize(reader: &[u8]) -> Self {
@@ -134,32 +132,62 @@ impl<U: PrimeField> ComputationalFieldSerialisation for U {
     }
 }
 
+impl<U: PrimeField> ChallengeSerialisation for U {
+    const CHALLENGE_BYTES: usize = U::BigInt::NUM_LIMBS * 8;
+
+    fn deserialize_challenge(reader: &[u8]) -> Self {
+        assert_eq!(reader.len(), Self::CHALLENGE_BYTES, "wrong challenge bytelen");
+        U::from_le_bytes_mod_order(&reader)
+    }
+}
+
 impl<U: PrimeField> Double for U {
     fn double(&self) -> Self {
         self.double()
     }
 }
 
-impl<U: PrimeField> TFeltUtil for U {
-    type Constants = U;
+impl<U: Zero> TSigUtil for U {
+    type Constants = Self;
 
     fn from_const(value: impl Into<Self::Constants>) -> Self {
         value.into()
-    }
-
-    fn static_pow(&self, exp: &[u64]) -> Self {
-        self.pow(exp)
     }
 
     fn require(&self) {
         assert!(self.is_zero())
     }
 
-    fn one() -> Self {
-        Self::one()
-    }
-
     fn zero() -> Self {
         Self::zero()
     }
+}
+
+impl<U: PrimeField> TFeltUtil for U {
+    fn static_pow(&self, exp: &[u64]) -> Self {
+        self.pow(exp)
+    }
+    fn one() -> Self {
+        Self::one()
+    }
+}
+
+pub trait TGroupUtil: TSigUtil {
+}
+pub trait TGroup: Sized + Clone + Copy
+    + TGroupUtil
+    + Add
+    + AddAssign
+    + Sub
+    + SubAssign
+    + Mul<Self::ScalarField, Output = Self>
+{
+    type ScalarField: TFelt;
+}
+pub trait ComputationalGroup: TGroup + CanonicalSerialize + CanonicalDeserialize + Eq + PartialEq where Self::ScalarField: ComputationalField {}
+
+impl<G: TSigUtil> TGroupUtil for G {}
+
+impl<G: CurveGroup> TGroup for G {
+    type ScalarField = G::ScalarField;
 }

@@ -6,7 +6,7 @@ use tracing::instrument;
 use crate::common::algfn::AlgFnSO;
 use crate::common::claims::{EvalClaim, SinglePointClaims, SumClaim};
 use crate::common::math::{eq_poly, evaluate_multivar};
-use crate::common::wrapper::{ComputationalField, TFelt};
+use crate::common::wrapper::{ComputationalField, TFelt, TSigUtil};
 use crate::components::sumcheck::dense_eq::{eq_eval, DenseSumcheckableSO};
 use crate::components::sumcheck::generic::{SumcheckGenericProverImpl, SumcheckProtocol};
 use crate::transcript::transcript::TArithmeticTranscript;
@@ -149,7 +149,7 @@ impl <F: TFelt, Transcript: TArithmeticTranscript<F>> TProtocol<Transcript> for 
     }
 }
 
-impl<F: ComputationalField, Transcript: TArithmeticTranscript<F>> TProverImpl<Transcript> for MultiDenseEqSumcheck<F> {
+impl<F: ComputationalField, Transcript: TArithmeticTranscript<F>> TProverImpl<Transcript> for MultiDenseEqSumcheck<F> where <F as TSigUtil>::Constants: From<u64>  {
     type Verifier = Self;
     type ProverInput = Vec<Vec<F>>;
     type ProverOutput = ();
@@ -247,13 +247,14 @@ impl<F: ComputationalField, Transcript: TArithmeticTranscript<F>> TProverImpl<Tr
 mod tests {
     use ark_std::rand::RngCore;
 use super::*;
-    use crate::transcript::transcript::tests::ManualTestTranscript as ManualTestTranscript;
     use ark_bn254::Fq as F;
     use ark_ff::Field;
     use ark_std::{test_rng, UniformRand};
     use ark_std::rand::Rng;
     use num_traits::{One, Zero};
     use crate::common::math::evaluate_multivar;
+    use crate::transcript::transcript::ProofTranscript;
+
     #[test]
     fn verifier_accepts_prover() {
         let rng = &mut test_rng();
@@ -282,12 +283,12 @@ use super::*;
 
             let sumcheck = MultiDenseEqSumcheck::new(logsize);
 
-            let mut transcript_p = ManualTestTranscript::new((0..1000).map(|_| F::rand(rng)).collect_vec());
+            let mut transcript_p = ProofTranscript::start_prover(b"test");
 
             let (output_claims, _) = sumcheck.prove(&mut transcript_p, claim.clone(), polys.clone());
 
             let proof = transcript_p.end();
-            let mut transcript_v = transcript_p;
+            let mut transcript_v = ProofTranscript::start_verifier(b"test", proof);
 
             let expected_output_claims = sumcheck.verify(&mut transcript_v, claim.clone());
 

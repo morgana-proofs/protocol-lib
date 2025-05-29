@@ -1,3 +1,4 @@
+pub mod commitments;
 pub mod sumcheck;
 pub mod vspark;
 pub mod lookups;

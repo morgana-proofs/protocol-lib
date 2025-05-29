@@ -1,6 +1,8 @@
+use std::marker::PhantomData;
 use std::ops::Index;
 use itertools::Itertools;
-use super::wrapper::TFelt;
+use crate::components::vspark::sqrt_vspark::VsparkFinalProd;
+use super::wrapper::{TFelt, TSigUtil};
 
 pub trait AlgFnSO<F: TFelt> : Clone {
     /// Executes function.
@@ -115,3 +117,33 @@ impl<F: TFelt, Fun: AlgFn<F>> AlgFnUtils<F> for Fun {
 }
 
 
+#[derive(Clone)]
+pub struct RLC<F> {
+    coefs: Vec<F>
+}
+
+impl<F: TFelt> RLC<F> {
+    pub fn new(coef: F, num_polys: usize) -> Self {
+        let mut coefs = Vec::with_capacity(num_polys);
+        coefs.push(F::one());
+        for _ in 1..num_polys {
+            coefs.push(coef * coefs.last().unwrap());
+        }
+        Self {
+            coefs
+        }
+    }
+}
+impl<F: TFelt> AlgFnSO<F> for RLC<F> {
+    fn exec(&self, args: &impl Index<usize, Output = F>) -> F {
+        self.coefs.iter().enumerate().map(|(i, coef)| {*coef * args[i]}).sum()
+    }
+
+    fn deg(&self) -> usize {
+        1
+    }
+
+    fn n_ins(&self) -> usize {
+        self.coefs.len()
+    }
+}

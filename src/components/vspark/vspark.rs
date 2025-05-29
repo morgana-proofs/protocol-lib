@@ -10,7 +10,7 @@ use itertools::{repeat_n, Itertools};
 use crate::common::algfn::{AlgFn, AlgFnSO, AlgFnSoUtils};
 use crate::common::claims::{EvalClaim, SinglePointClaims, SumClaim};
 use crate::common::math::{eq_poly, evaluate_multivar, top_bind_multivar_point};
-use crate::common::wrapper::{ComputationalField, TFelt};
+use crate::common::wrapper::{ComputationalField, TFelt, TSigUtil};
 use crate::components::lookups::logup::logup::{IndexedLookupClaim, IndexedLookupInput, Logup, LookupClaim, LookupInput, LookupType};
 use crate::components::sumcheck::dense::DenseSumcheck;
 use crate::components::sumcheck::dense_eq::eq_eval;
@@ -199,7 +199,7 @@ impl<F: TFelt, Transcript: TArithmeticTranscript<F>> TProtocol<Transcript> for V
 }
 
 
-impl<F: ComputationalField, Transcript: TArithmeticTranscript<F>> TProverImpl<Transcript> for Vspark<F> {
+impl<F: ComputationalField, Transcript: TArithmeticTranscript<F>> TProverImpl<Transcript> for Vspark<F> where <F as TSigUtil>::Constants: From<u64>  {
     type Verifier = Self;
     type ProverInput = VsparkProverInput<F>;
     type ProverOutput = ();
@@ -408,13 +408,13 @@ mod tests {
     use crate::common::math::evaluate_multivar;
     use crate::components::vspark::matrix::{tau::no_decomposition::table, r_size, VsparkMatrixGroup};
     use crate::protocol::component::{TProtocol, TProverImpl};
-    use crate::transcript::transcript::tests::ManualTestTranscript;
 
     use tracing::level_filters::LevelFilter;
     use tracing_subscriber::{EnvFilter, fmt, prelude::*, reload, Registry, Layer};
     use tracing_subscriber::fmt::format::FmtSpan;
     use tracing_subscriber::layer::{Layered, SubscriberExt};
     use tracing_subscriber::util::{SubscriberInitExt, TryInitError};
+    use crate::transcript::transcript::ProofTranscript;
 
     #[test]
     fn test_vspark() {
@@ -474,13 +474,12 @@ mod tests {
                 _pd: Default::default(),
             };
 
-            let mut transcript_p = ManualTestTranscript::new((0..1000).map(|_| F::rand(rng)).collect_vec());
+            let mut transcript_p = ProofTranscript::start_prover(b"test");
             let (output_claims, _) = vspark.prove(&mut transcript_p, e_claim_before.clone(), prover_input);
             let proof = transcript_p.end();
-            let mut transcript_v = transcript_p;
+            let mut transcript_v = ProofTranscript::start_verifier(b"test", proof);
 
             let expected_output_claims = vspark.verify(&mut transcript_v, e_claim_before.clone());
-            transcript_v.end();
             assert_eq!(output_claims, expected_output_claims);
         }
     }
