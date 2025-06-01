@@ -29,11 +29,11 @@ impl<F: TFelt, Fun: AlgFnSO<F>> MergedSumcheck<F, Fun> {
 
 impl<F: TFelt, Fun: AlgFnSO<F>, Transcript: TArithmeticTranscript<F>> TProtocol<Transcript> for MergedSumcheck<F, Fun>
 {
-    type ClaimsBefore = SinglePointClaims<F>;
-    type ClaimsAfter = SinglePointClaims<F>;
+    type ClaimsBefore = Vec<SumClaim<F>>;
+    type ClaimsAfter = Vec<SinglePointClaims<F>>;
 
     fn verify(&self, ctx: &mut Transcript, claims: Self::ClaimsBefore) -> Self::ClaimsAfter {
-        let SinglePointClaims{ evs, point: starting_point } = claims;
+        let evs = claims.iter().map(|claim| claim.0).collect_vec();
         let (reordering, mut num_vars, mut claims): (Vec<usize>, Vec<usize>, Vec<F>) =
             self.num_vars
                 .iter()
@@ -52,7 +52,7 @@ impl<F: TFelt, Fun: AlgFnSO<F>, Transcript: TArithmeticTranscript<F>> TProtocol<
         let mut function = RLCAlgFn::new(self.f.clone());
         let gamma = ctx.challenge();
         let mut current_gamma_pow = F::one();
-        let mut current_point = starting_point;
+        let mut current_point = vec![];
 
         for i in 1..(num_vars.len() + 1) {
             let mut rerun = true;
@@ -83,7 +83,21 @@ impl<F: TFelt, Fun: AlgFnSO<F>, Transcript: TArithmeticTranscript<F>> TProtocol<
         let poly_evs = (0..function.n_ins()).map(|_| ctx.read()).collect_vec();
 
         (function.exec(&poly_evs) - current_claim).require();
-        SinglePointClaims {point: current_point, evs: poly_evs.into_iter().zip(reordering.iter()).sorted_by(|(_, a), (_, b)| a.cmp(b)).map(|(a, _)| a).collect_vec()}
+
+        poly_evs.into_iter()
+            .chunks(self.f.n_ins())
+            .into_iter()
+            .zip_eq(reordering.iter())
+            .sorted_by(|(_, a), (_, b)| a.cmp(b))
+            .map(|(a, _)| a)
+            .zip_eq(self.num_vars.iter())
+            .map(|(chunk, logsize)| {
+                SinglePointClaims {
+                    evs: chunk.collect_vec(),
+                    point: current_point[current_point.len() - *logsize..].to_vec(),
+                }
+            })
+            .collect_vec()
     }
 }
 
@@ -93,7 +107,7 @@ impl<F: ComputationalField, Fun: AlgFnSO<F>, Transcript: TArithmeticTranscript<F
     type ProverOutput = ();
 
     fn prove(&self, ctx: &mut Transcript, claims: <Self::Verifier as TProtocol<Transcript>>::ClaimsBefore, mut advice: Self::ProverInput) -> (<Self::Verifier as TProtocol<Transcript>>::ClaimsAfter, Self::ProverOutput) {
-        let SinglePointClaims{ evs, point: starting_point } = claims;
+        let evs = claims.iter().map(|claim| claim.0).collect_vec();
         let (reordering, mut num_vars, mut claims, mut advice): (Vec<usize>, Vec<usize>, Vec<F>, VecDeque<Vec<Vec<F>>>) =
             self.num_vars
                 .iter()
@@ -109,7 +123,7 @@ impl<F: ComputationalField, Fun: AlgFnSO<F>, Transcript: TArithmeticTranscript<F
         let mut function = RLCAlgFn::new(self.f.clone());
         let gamma = ctx.challenge();
         let mut current_gamma_pow = F::one();
-        let mut current_point = starting_point;
+        let mut current_point = vec![];
         let mut current_polys = Some(advice.pop_front().expect("advice empty"));
 
         let mut poly_evs = None;
@@ -160,7 +174,20 @@ impl<F: ComputationalField, Fun: AlgFnSO<F>, Transcript: TArithmeticTranscript<F
 
         (function.exec(&poly_evs) - current_claim).require();
         (
-            SinglePointClaims {point: current_point, evs: poly_evs.into_iter().zip(reordering.iter()).sorted_by(|(_, a), (_, b)| a.cmp(b)).map(|(a, _)| a).collect_vec()},
+            poly_evs.into_iter()
+                .chunks(self.f.n_ins())
+                .into_iter()
+                .zip_eq(reordering.iter())
+                .sorted_by(|(_, a), (_, b)| a.cmp(b))
+                .map(|(a, _)| a)
+                .zip_eq(self.num_vars.iter())
+                .map(|(chunk, logsize)| {
+                    SinglePointClaims {
+                        evs: chunk.collect_vec(),
+                        point: current_point[current_point.len() - *logsize..].to_vec(),
+                    }
+                })
+                .collect_vec(),
             ()
         )
     }
@@ -198,7 +225,7 @@ mod tests {
     #[test]
     fn dense_sumcheck_with_verifier_accepts_prover() {
         let rng = &mut test_rng();
-        let logsizes = vec![7, 6, 6, 5, 5, 5, 4, 4, 4, 4];
+        let logsizes = vec![4, 4, 5, 6, 7, 6, 5, 5, 4, 4];
         let polys : Vec<Vec<Vec<F>>> = logsizes.iter().map(|logsize| (0..2).map(|_| (0 .. 1 << logsize).map(|_|F::rand(rng)).collect()).collect()).collect();
 
         let f = TestFunction{};
@@ -215,9 +242,9 @@ mod tests {
 
         let mut transcript_p = ProofTranscript::start_prover(b"test");
 
-        let claim = SinglePointClaims{ evs: output.iter().map(|p| p.iter().sum()).collect_vec(), point: vec![] };
+        let claim = output.iter().map(|p| SumClaim(p.iter().sum())).collect_vec();
 
-        let sumcheck = MergedSumcheck::new(f, logsizes);
+        let sumcheck = MergedSumcheck::new(f, logsizes.clone());
         let (output_claims, _) = sumcheck.prove(&mut transcript_p, claim.clone().into(), polys.clone());
         let proof = transcript_p.end();
         let mut transcript_v = ProofTranscript::start_verifier(b"test", proof);
@@ -225,7 +252,16 @@ mod tests {
         let expected_output_claims = sumcheck.verify(&mut transcript_v, claim.into());
         assert_eq!(output_claims, expected_output_claims);
 
-        let SinglePointClaims { point : new_point, evs } = output_claims;
-        // assert_eq!(polys.iter().map(|poly| evaluate_multivar(poly, &new_point)).collect_vec(), evs);
+        for (poly_group, output) in polys.iter().zip_eq(output_claims.iter()) {
+            assert_eq!(
+                poly_group.iter()
+                    .map(|poly| evaluate_multivar(poly, &output.point))
+                    .collect_vec(),
+                output.evs,
+            )
+        }
     }
 }
+
+
+

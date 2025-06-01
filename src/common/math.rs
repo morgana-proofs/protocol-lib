@@ -220,7 +220,7 @@ pub fn eq_poly_sequence_from_multiplier_last<F: TFelt>(mul: F, pt: &[F]) -> Opti
 // multivar poly
 pub fn evaluate_multivar<F: ComputationalField>(poly: &[F], pt: &[F]) -> F {
     let e_p = eq_poly(pt);
-    poly.par_iter().zip(e_p.par_iter()).map(|(&a, b)| a * b).sum()
+    poly.par_iter().zip_eq(e_p.par_iter()).map(|(&a, b)| a * b).sum()
     
 }
 
